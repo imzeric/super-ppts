@@ -1,0 +1,34 @@
+{
+  "name": "super-ppts",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' next dev",
+    "build": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' next build",
+    "start": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' next start",
+    "test": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' playwright test"
+  },
+  "dependencies": {
+    "@antv/g6": "5.1.1",
+    "fflate": "0.8.3",
+    "mermaid": "12.3.0",
+    "next": "16.4.6",
+    "pngjs": "7.0.0",
+    "pptxgenjs": "4.0.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@fontsource/noto-sans-sc": "5.3.1",
+    "@playwright/test": "1.65.1",
+    "@types/node": "22.19.21",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}
