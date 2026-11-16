@@ -2,23 +2,23 @@
 @import "@fontsource/noto-sans-sc/700.css";
 
 :root {
-  color-scheme: dark;
-  --chrome: #0c1218;
-  --panel: #141c26;
-  --panel-2: #1b2633;
-  --ink: #e8eef5;
-  --muted: #a9bdd0;
-  --line: rgba(168, 198, 220, 0.24);
-  --accent: #2bb3cf;
-  --accent-ink: #042028;
-  --focus: #8fe4f4;
-  --ok-bg: #12352d;
-  --ok-fg: #c6f3e2;
-  --alert-bg: #3a2228;
-  --alert-fg: #ffd7dc;
-  --banner-bg: #102833;
-  --banner-fg: #d5f3f8;
-  --field: #0d151e;
+  color-scheme: light;
+  --chrome: #eef1f4;
+  --panel: #ffffff;
+  --panel-2: #f4f6f8;
+  --ink: #1c2430;
+  --muted: #5c6b7a;
+  --line: #d5dbe3;
+  --accent: #1b4f86;
+  --accent-ink: #ffffff;
+  --focus: #1b4f86;
+  --ok-bg: #e7f6ee;
+  --ok-fg: #145c38;
+  --alert-bg: #fdecee;
+  --alert-fg: #8a2430;
+  --banner-bg: #e8f1fa;
+  --banner-fg: #1c3d5c;
+  --field: #ffffff;
   --slide: #f7f4ee;
   --slide-ink: #1c1916;
   --slide-node: #efe6d6;
@@ -28,13 +28,13 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
 body { background: var(--chrome); color: var(--ink); }
-::selection { background: #1d6272; color: #f4fdff; }
+::selection { background: #d6e4f5; color: var(--ink); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 a { color: inherit; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 textarea, input, select { caret-color: var(--accent); }
-* { scrollbar-color: #3d5368 var(--chrome); }
+* { scrollbar-color: #c5ced8 var(--chrome); }
 
 .desk { max-width: 1280px; margin: 0 auto; padding: 12px 16px 32px; }
 .mast {
@@ -72,7 +72,7 @@ textarea, input, select { caret-color: var(--accent); }
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 16px 18px 14px;
+  padding: 20px 24px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -172,7 +172,7 @@ button:disabled { opacity: 0.45; }
 .handle-sw { left: -5px; bottom: -5px; }
 .handle-w { left: -5px; top: calc(50% - 5px); }
 .stage-slide h2, .stage-slide pre { outline: none; }
-.stage-slide h2:focus, .stage-slide pre:focus { box-shadow: inset 0 -2px 0 #1d8eae; }
+.stage-slide h2:focus, .stage-slide pre:focus { box-shadow: inset 0 -2px 0 var(--accent); }
 .inspector label, .sheet label { display: grid; gap: 6px; }
 .source-preview { max-height: 180px; overflow: auto; background: var(--slide); color: var(--slide-ink); border-radius: 4px; }
 .section-card { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
