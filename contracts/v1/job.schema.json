@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://super-ppts.local/contracts/v1/job.schema.json",
+  "title": "CreateJob",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "projectId", "idempotencyKey", "items"],
+  "properties": {
+    "contractVersion": { "type": "integer", "const": 1 },
+    "projectId": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 120 },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 320,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slotId", "slotVersion"],
+        "properties": {
+          "slotId": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "slotVersion": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "force": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

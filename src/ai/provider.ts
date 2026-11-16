@@ -1,6 +1,7 @@
 import { AppError } from "../domain/errors";
 import { parseMarkdownOutline, tightenMarkdown } from "../domain/markdown";
 import { DEMO_MARKDOWN } from "./fixture";
+import { assertResolvedProviderUrl, trustedHostsFromEnv, type Lookup } from "./guard";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -33,19 +34,26 @@ function endpoint(baseUrl: string): string {
   return `${trimmed}/chat/completions`;
 }
 
-function createLiveProvider(options: { baseUrl: string; apiKey: string; model: string; fetchImpl: FetchLike }): OutlineProvider {
+function createLiveProvider(options: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  fetchImpl: FetchLike;
+  trustedHosts?: string[];
+  lookup?: Lookup;
+}): OutlineProvider {
   const complete = async (user: string): Promise<string> => {
     if (!options.baseUrl || !options.model) {
       throw new AppError("PROVIDER_CONFIG", "已填写文本密钥，还需要同时填写文本接口地址和模型名。", 400);
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
+    const destination = await assertResolvedProviderUrl(endpoint(options.baseUrl), options.trustedHosts ?? [], options.lookup);
+    const linked = linkedSignal(undefined);
     let response: Response;
     try {
-      response = await options.fetchImpl(endpoint(options.baseUrl), {
+      response = await options.fetchImpl(destination, {
         method: "POST",
         redirect: "error",
-        signal: controller.signal,
+        signal: linked.signal,
         headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           model: options.model,
@@ -60,7 +68,7 @@ function createLiveProvider(options: { baseUrl: string; apiKey: string; model: s
     } catch {
       throw new AppError("PROVIDER_UNAVAILABLE", "模型服务没有连上，大纲未更新。请稍后重试。", 502);
     } finally {
-      clearTimeout(timer);
+      linked.clear();
     }
     if (!response.ok) throw new AppError("PROVIDER_UNAVAILABLE", `模型服务返回 ${response.status}，大纲未更新。`, 502);
     let payload: unknown;
@@ -104,16 +112,26 @@ const demoProvider: OutlineProvider = {
   },
 };
 
-export async function chatJson(options: { baseUrl: string; apiKey: string; model: string; system: string; user: string; fetchImpl: FetchLike }): Promise<unknown> {
+export async function chatJson(options: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  system: string;
+  user: string;
+  fetchImpl: FetchLike;
+  trustedHosts?: string[];
+  lookup?: Lookup;
+  signal?: AbortSignal;
+}): Promise<unknown> {
   if (!options.baseUrl || !options.model) throw new AppError("PROVIDER_CONFIG", "文本接口还需要地址和模型名。", 400);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
+  const destination = await assertResolvedProviderUrl(endpoint(options.baseUrl), options.trustedHosts ?? [], options.lookup);
+  const linked = linkedSignal(options.signal);
   let response: Response;
   try {
-    response = await options.fetchImpl(endpoint(options.baseUrl), {
+    response = await options.fetchImpl(destination, {
       method: "POST",
       redirect: "error",
-      signal: controller.signal,
+      signal: linked.signal,
       headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: options.model,
@@ -128,7 +146,7 @@ export async function chatJson(options: { baseUrl: string; apiKey: string; model
   } catch {
     throw new AppError("PROVIDER_UNAVAILABLE", "模型服务没有连上，这个占位未替换。", 502);
   } finally {
-    clearTimeout(timer);
+    linked.clear();
   }
   if (!response.ok) throw new AppError("PROVIDER_UNAVAILABLE", `模型服务返回 ${response.status}，这个占位未替换。`, 502);
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
@@ -137,7 +155,7 @@ export async function chatJson(options: { baseUrl: string; apiKey: string; model
   return JSON.parse(content) as unknown;
 }
 
-export function resolveProvider(env: Env, fetchImpl: FetchLike = fetch): { mode: "demo" | "live"; provider: OutlineProvider } {
+export function resolveProvider(env: Env, fetchImpl: FetchLike = fetch, lookup?: Lookup): { mode: "demo" | "live"; provider: OutlineProvider } {
   const apiKey = env.AI_TEXT_API_KEY?.trim() || env.AI_API_KEY?.trim() || "";
   if (!apiKey) return { mode: "demo", provider: demoProvider };
   return {
@@ -147,6 +165,23 @@ export function resolveProvider(env: Env, fetchImpl: FetchLike = fetch): { mode:
       apiKey,
       model: env.AI_TEXT_MODEL?.trim() || env.AI_MODEL?.trim() || "",
       fetchImpl,
+      trustedHosts: trustedHostsFromEnv(env),
+      lookup,
     }),
+  };
+}
+
+function linkedSignal(parent?: AbortSignal, timeoutMs = 30_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (parent?.aborted) controller.abort();
+  const onAbort = () => controller.abort();
+  parent?.addEventListener("abort", onAbort, { once: true });
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", onAbort);
+    },
   };
 }

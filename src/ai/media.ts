@@ -1,11 +1,26 @@
 import { AppError } from "../domain/errors";
+import { assertResolvedProviderUrl, type Lookup } from "./guard";
 import type { FetchLike } from "./provider";
-import { assertProviderUrl } from "./credentials";
 
 export const DEMO_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 const TIMEOUT_MS = 30_000;
+
+function linkedSignal(parent?: AbortSignal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  if (parent?.aborted) controller.abort();
+  const onAbort = () => controller.abort();
+  parent?.addEventListener("abort", onAbort, { once: true });
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", onAbort);
+    },
+  };
+}
 
 export function demoPngBytes(): Uint8Array {
   return Buffer.from(DEMO_PNG_BASE64, "base64");
@@ -17,26 +32,28 @@ export async function generateImage(options: {
   model: string;
   prompt: string;
   fetchImpl: FetchLike;
+  trustedHosts?: string[];
+  lookup?: Lookup;
+  signal?: AbortSignal;
 }): Promise<Uint8Array> {
   if (!options.baseUrl || !options.model) {
     throw new AppError("PROVIDER_CONFIG", "插图接口还需要地址和模型名。", 400);
   }
-  const endpoint = `${assertProviderUrl(options.baseUrl).replace(/\/$/, "")}/images/generations`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const endpoint = `${await assertResolvedProviderUrl(options.baseUrl, options.trustedHosts ?? [], options.lookup)}/images/generations`;
+  const linked = linkedSignal(options.signal);
   let response: Response;
   try {
     response = await options.fetchImpl(endpoint, {
       method: "POST",
       redirect: "error",
-      signal: controller.signal,
+      signal: linked.signal,
       headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: options.model, prompt: options.prompt, size: "1024x1024", response_format: "b64_json" }),
     });
   } catch {
     throw new AppError("PROVIDER_UNAVAILABLE", "插图服务没有连上，这个占位未替换。", 502);
   } finally {
-    clearTimeout(timer);
+    linked.clear();
   }
   if (!response.ok) throw new AppError("PROVIDER_UNAVAILABLE", `插图服务返回 ${response.status}，这个占位未替换。`, 502);
   let payload: unknown;
@@ -60,17 +77,19 @@ export async function understandImage(options: {
   imageBase64: string;
   mime: "image/png" | "image/jpeg";
   fetchImpl: FetchLike;
+  trustedHosts?: string[];
+  lookup?: Lookup;
+  signal?: AbortSignal;
 }): Promise<string> {
   if (!options.baseUrl || !options.model) throw new AppError("PROVIDER_CONFIG", "视觉接口还需要地址和模型名。", 400);
-  const endpoint = `${assertProviderUrl(options.baseUrl).replace(/\/$/, "")}/chat/completions`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const endpoint = `${await assertResolvedProviderUrl(options.baseUrl, options.trustedHosts ?? [], options.lookup)}/chat/completions`;
+  const linked = linkedSignal(options.signal);
   let response: Response;
   try {
     response = await options.fetchImpl(endpoint, {
       method: "POST",
       redirect: "error",
-      signal: controller.signal,
+      signal: linked.signal,
       headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: options.model,
@@ -89,7 +108,7 @@ export async function understandImage(options: {
   } catch {
     throw new AppError("PROVIDER_UNAVAILABLE", "视觉服务没有连上。", 502);
   } finally {
-    clearTimeout(timer);
+    linked.clear();
   }
   if (!response.ok) throw new AppError("PROVIDER_UNAVAILABLE", `视觉服务返回 ${response.status}。`, 502);
   const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };

@@ -1,0 +1,44 @@
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?set INTERNAL_SERVICE_TOKEN}
+      WORKER_DATABASE_PATH: /data/jobs.db
+      WEB_INTERNAL_URL: http://web:3000
+      JOB_LEASE_SECONDS: "10"
+    volumes:
+      - worker-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:${HOST_PORT:-3000}:3000"
+    environment:
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?set INTERNAL_SERVICE_TOKEN}
+      WORKER_URL: http://worker:8080
+      DATABASE_PATH: /data/super-ppts.db
+      TRUSTED_PROVIDER_HOSTS: ${TRUSTED_PROVIDER_HOSTS:-}
+    volumes:
+      - web-data:/data
+    depends_on:
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((r)=>r.json()).then((b)=>process.exit(b.worker==='up'?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  web-data:
+  worker-data:

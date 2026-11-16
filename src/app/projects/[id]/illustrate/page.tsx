@@ -5,6 +5,11 @@ import { useParams } from "next/navigation";
 import { Frame } from "@/components/Frame";
 import { readJson, type ProjectView } from "@/lib/model";
 
+type JobItem = { slotId: string; status: string; errorMessage?: string | null };
+type JobState = { jobId: string; status: string; items: JobItem[] };
+
+const ACTIVE = new Set(["queued", "running", "cancelling"]);
+
 export default function IllustratePage() {
   const params = useParams<{ id: string }>();
   const [view, setView] = useState<ProjectView | null>(null);
@@ -12,6 +17,8 @@ export default function IllustratePage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [runId, setRunId] = useState("");
+  const [watch, setWatch] = useState(0);
+  const [job, setJob] = useState<JobState | null>(null);
 
   function load() {
     return fetch(`/api/projects/${params.id}`).then((response) => readJson<ProjectView>(response)).then(setView);
@@ -21,17 +28,46 @@ export default function IllustratePage() {
     void load().catch((reason: Error) => setError(reason.message));
   }, [params.id]);
 
+  useEffect(() => {
+    if (!runId) return;
+    let stopped = false;
+    async function poll() {
+      const response = await fetch(`/api/projects/${params.id}/generate/${runId}`);
+      const body = (await response.json()) as JobState & { message?: string };
+      if (!response.ok) throw new Error(body.message || "没有查到绘制进度。");
+      if (stopped) return;
+      setJob(body);
+      setNotice(describeJob(body));
+      if (!ACTIVE.has(body.status)) {
+        await load();
+        return;
+      }
+      window.setTimeout(() => void poll().catch((reason: Error) => setError(reason.message)), 400);
+    }
+    void poll().catch((reason: Error) => setError(reason.message));
+    return () => {
+      stopped = true;
+    };
+  }, [runId, watch, params.id]);
+
   async function generate(slotIds: string[]) {
-    const body = await readJson<{ runId: string; results: Array<{ status: string }>; project: ProjectView }>(
-      await fetch(`/api/projects/${params.id}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slotIds }),
-      }),
-    );
+    setError("");
+    const response = await fetch(`/api/projects/${params.id}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ slotIds }),
+    });
+    const body = (await response.json()) as { runId?: string; jobId?: string; message?: string };
+    if (response.status === 409 && body.jobId) {
+      setRunId(body.jobId);
+      setWatch((current) => current + 1);
+      setNotice(body.message || "这个项目已有绘制任务。已接上该任务。");
+      return;
+    }
+    if (!response.ok || !body.runId) throw new Error(body.message || "绘制没有开始。");
     setRunId(body.runId);
-    setView(body.project);
-    setNotice(body.results.some((item) => item.status === "skipped") ? "已跳过已完成的占位。" : "绘制结束。");
+    setWatch((current) => current + 1);
+    setNotice("绘制已交给后台。可以留在这一页看进度。");
   }
 
   async function download(slotId: string, format: "png" | "svg", filename: string) {
@@ -63,6 +99,8 @@ export default function IllustratePage() {
     URL.revokeObjectURL(url);
   }
 
+  const running = job ? ACTIVE.has(job.status) : false;
+
   if (!view && !error) return <Frame step="illustrate"><p role="status">正在读取配图…</p></Frame>;
   if (!view) return <Frame step="illustrate"><p className="alert" role="alert">{error}</p></Frame>;
 
@@ -70,7 +108,7 @@ export default function IllustratePage() {
     <Frame mode={view.mode} step="illustrate" projectId={params.id}>
       <section className="sheet">
         <h1>生成配图并导出。</h1>
-        <p className="lede">PNG 是位图。SVG 是矢量图，幻灯片里只放它的预览。PowerPoint 可编辑会写成形状、连接线或带工作簿的图表。模型插图不能选后两种。</p>
+        <p className="lede">PNG 是位图。SVG 是矢量图，幻灯片里只放它的预览。PowerPoint 可编辑会写成形状、连接线或带工作簿的图表。模型插图不能选后两种。绘制任务在后台进行，刷新后仍可查询。</p>
         {error ? <p className="alert" role="alert">{error}</p> : null}
         {notice ? <p className="ok" role="status">{notice}</p> : null}
         {view.slots.map((slot) => (
@@ -90,13 +128,30 @@ export default function IllustratePage() {
           </article>
         ))}
         <div className="row">
-          <button className="seal" type="button" onClick={() => void generate(selected).catch((reason: Error) => setError(reason.message))}>绘制所选</button>
-          <button className="ghost" type="button" onClick={() => void generate(view.slots.map((slot) => slot.id)).catch((reason: Error) => setError(reason.message))}>绘制全部</button>
-          <button className="ghost" type="button" onClick={() => void generate(view.slots.filter((slot) => slot.status === "failed").map((slot) => slot.id)).catch((reason: Error) => setError(reason.message))}>重试失败项</button>
-          <button className="quiet" type="button" disabled={!runId} onClick={() => void fetch(`/api/projects/${params.id}/generate/${runId}/cancel`, { method: "POST" })}>取消绘制</button>
+          <button className="seal" type="button" disabled={running} onClick={() => void generate(selected).catch((reason: Error) => setError(reason.message))}>绘制所选</button>
+          <button className="ghost" type="button" disabled={running} onClick={() => void generate(view.slots.map((slot) => slot.id)).catch((reason: Error) => setError(reason.message))}>绘制全部</button>
+          <button className="ghost" type="button" disabled={!runId || running} onClick={() => void fetch(`/api/projects/${params.id}/generate/${runId}/retry`, { method: "POST" }).then(async (response) => {
+            if (!response.ok) throw new Error(((await response.json()) as { message?: string }).message || "没有可以重试的项。");
+            setWatch((current) => current + 1);
+          }).catch((reason: Error) => setError(reason.message))}>重试未完成项</button>
+          <button className="quiet" type="button" disabled={!runId || !running} onClick={() => void fetch(`/api/projects/${params.id}/generate/${runId}/cancel`, { method: "POST" })}>取消绘制</button>
           <button className="seal" type="button" onClick={() => void exportPptx().catch((reason: Error) => setError(reason.message))}>导出 PPTX</button>
         </div>
       </section>
     </Frame>
   );
+}
+
+function describeJob(job: JobState): string {
+  const done = job.items.filter((item) => item.status === "succeeded" || item.status === "skipped").length;
+  const active = job.items.filter((item) => item.status === "leased").length;
+  const pending = job.items.filter((item) => item.status === "pending").length;
+  const failed = job.items.filter((item) => item.status === "failed").length;
+  const skipped = job.items.filter((item) => item.status === "skipped").length;
+  if (ACTIVE.has(job.status)) return `绘制中：已完成 ${done}，进行中 ${active}，等待 ${pending}。`;
+  if (job.status === "cancelled") return "已取消。已完成的占位会保留。";
+  if (job.status === "interrupted") return "绘制被中断。已完成的占位会保留，未完成项不会自动重试。";
+  if (skipped > 0 && failed === 0) return "已跳过已完成的占位。";
+  if (failed > 0) return `绘制结束。成功 ${done}，失败 ${failed}。`;
+  return "绘制结束。";
 }

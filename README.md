@@ -1,6 +1,6 @@
 # 校对台
 
-单用户、单进程的中文文稿工具。六步完成一份可编辑的 PowerPoint：
+单用户的中文文稿工具。编辑器和原生 PPTX 在 Next.js 里，批量绘制的任务队列在一个不对外发布的 Python 服务里。六步完成一份可编辑的 PowerPoint：
 
 1. 在首页写下生成说明。产品不设字数上限，也不截断；超过 100 万字会拒绝并说明。
 2. 编辑 Markdown 大纲，保存、重新加载、采用优化。
@@ -9,20 +9,54 @@
 5. 在左侧缩略图、中间画布、右侧属性的编辑器里改文字并添加占位。
 6. 按占位生成 PNG、SVG 或 PowerPoint 可编辑对象，然后导出。
 
-本机受信任即可。没有登录。不要把进程暴露到不受信任的网络。
+本机受信任即可。没有登录。不要把网页暴露到不受信任的网络。供应商密钥明文存在 Next.js 的 SQLite 里，这是本机单用户边界，没有另做一层密钥就在旁边的加密。
 
 ## 环境
 
-- Node.js 22
-- pnpm 10
+- Node.js 22.23.4
+- pnpm 10.33.4
+- Python 3.12
 
-## 安装与运行
+## 本机运行
 
 ```bash
 pnpm install
+python3 -m venv .venv
+.venv/bin/pip install -r worker/requirements.txt
 cp .env.example .env.local
-pnpm dev
 ```
+
+在 `.env.local` 里给 `INTERNAL_SERVICE_TOKEN` 填同一个本地令牌。然后开两个终端：
+
+```bash
+INTERNAL_SERVICE_TOKEN=本地令牌 WEB_INTERNAL_URL=http://127.0.0.1:3000 \
+  WORKER_DATABASE_PATH=data/jobs.db \
+  .venv/bin/python -m uvicorn app.main:app --app-dir worker --host 127.0.0.1 --port 8080
+```
+
+```bash
+WORKER_URL=http://127.0.0.1:8080 INTERNAL_SERVICE_TOKEN=本地令牌 pnpm dev
+```
+
+浏览器打开 `http://127.0.0.1:3000`。没有模型密钥时仍是演示模式，但批量绘制会走 Python 任务。绘制服务没启动时，页面会说明服务没有连上，已保存的大纲、页面和占位不会被清空。
+
+## 一条命令启动
+
+```bash
+export INTERNAL_SERVICE_TOKEN=本地令牌
+docker compose up --build
+```
+
+只发布 `127.0.0.1:3000`。Python 服务在 Compose 网络内，没有宿主机端口。数据卷分别保存 `super-ppts.db` 和 `jobs.db`。网页镜像安装了 Noto CJK 字体；原生 PPTX 仍由 Node 里的 PptxGenJS 写出，不把位图当成形状。
+
+升级前复制数据库：
+
+```bash
+cp data/super-ppts.db data/super-ppts.db.bak
+cp data/jobs.db data/jobs.db.bak
+```
+
+迁移只增加 `schema_migrations` 和任务关联列，不删除文稿。回退时停止进程，用这两个副本覆盖回去。不要手写删除语句。
 
 浏览器打开 `http://127.0.0.1:3000`。
 
@@ -63,6 +97,8 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
+GitHub Actions 还会跑同一套浏览器端到端测试，以及 `docker compose build` 后的启动检查。容器检查只确认网页能打开，并且 `/api/health` 里绘制服务为 `up`。它不在容器里走完生成和导出。
+
 生产进程：
 
 ```bash
@@ -72,7 +108,7 @@ pnpm start
 
 ## 协议
 
-只实现下面两种 OpenAI 兼容调用，不表示任意供应商都能用。地址必须是 https；只有 `127.0.0.1` 和 `localhost` 允许 http。地址中不能带账号密码。超时 30 秒，重定向视为失败。
+只实现下面两种 OpenAI 兼容调用，不表示任意供应商都能用。公网地址必须是 https。`localhost`、`127.0.0.1`、`::1` 和 `host.docker.internal` 允许 http。其他内网主机要写进 `TRUSTED_PROVIDER_HOSTS`，不会被静默禁用。云元数据地址和链路本地地址始终拒绝。请求前会检查解析出的 IP。重定向直接失败，不跟随。超时 30 秒。地址中不能带账号密码。
 
 | 能力 | 请求 | 成功响应 |
 | --- | --- | --- |
@@ -95,7 +131,7 @@ diagram: flow
 - 挑选图书
 ```
 
-`kind` 可以是 `title`、`bullets`、`table`、`diagram`、`chart`。图的 `diagram` 只能是 `flow`、`org`、`architecture`、`relation`。图表还要 `chart: bar|line|pie`，并用第二列为数字的表格。一次最多 8 张幻灯片。诊断会写明行号。
+`kind` 可以是 `title`、`bullets`、`table`、`diagram`、`chart`。图的 `diagram` 只能是 `flow`、`org`、`architecture`、`relation`。图表还要 `chart: bar|line|pie`，并用第二列为数字的表格。一次最多 40 张幻灯片，每页最多 8 个占位，一次绘制任务最多 320 项。诊断会写明行号。
 
 ## 来源和输出
 

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { readCapability } from "../ai/credentials";
+import { trustedHostsFromEnv } from "../ai/guard";
+import { withTransaction } from "../db/database";
+import { redactSecrets } from "./redact";
 import { DEMO_PNG_BASE64, demoPngBytes, generateImage } from "../ai/media";
 import { chatJson, type FetchLike, type OutlineProvider } from "../ai/provider";
 import { semanticFromSlot } from "../ai/semantic";
@@ -278,11 +281,13 @@ export function createServices(
         if (slot.slideId && !ids.has(slot.slideId)) return { ...slot, detached: true, slideId: slot.slideId };
         return slot;
       });
-      db.prepare("UPDATE slide_copies SET slides_json = ?, updated_at = ? WHERE project_id = ?").run(JSON.stringify(slides), now(), projectId);
-      db.prepare("DELETE FROM slots WHERE project_id = ?").run(projectId);
-      for (const slot of slots) {
-        db.prepare("INSERT INTO slots (id, project_id, payload_json, updated_at) VALUES (?, ?, ?, ?)").run(slot.id, projectId, JSON.stringify(slot), now());
-      }
+      withTransaction(db, () => {
+        db.prepare("UPDATE slide_copies SET slides_json = ?, updated_at = ? WHERE project_id = ?").run(JSON.stringify(slides), now(), projectId);
+        db.prepare("DELETE FROM slots WHERE project_id = ?").run(projectId);
+        for (const slot of slots) {
+          db.prepare("INSERT INTO slots (id, project_id, payload_json, updated_at) VALUES (?, ?, ?, ?)").run(slot.id, projectId, JSON.stringify(slot), now());
+        }
+      });
       return view(projectId);
     },
     updateCopy: (projectId: string, slides: SlideCopy[]) => {
@@ -386,7 +391,7 @@ export function createServices(
           db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(next), now(), slot.id);
           results.push({ id: slot.id, status: "succeeded" });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "绘制失败。";
+          const message = redactSecrets(error instanceof Error ? error.message : "绘制失败。", secretValues(db, env));
           const next: Slot = { ...slot, status: "failed", error: message.slice(0, 300) };
           db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(next), now(), slot.id);
           results.push({ id: slot.id, status: "failed", error: next.error });
@@ -441,20 +446,73 @@ export function createServices(
       if (!row) throw new AppError("NOT_FOUND", "没有找到这张图。", 404);
       const current = oneVersion(row.project_id, "current");
       const sections = parseOutline(JSON.parse(current.sections_json));
-      const section = sections.find((item) => item.diagramId === diagramId) ?? sections.find((item) => item.kind === "diagram");
-      if (!section?.bullets || section.bullets.length < 2) throw new AppError("VALIDATION", "大纲里没有足够的节点要点可重排。", 400);
+      const section = sections.find((item) => item.diagramId === diagramId);
+      if (!section?.bullets || section.bullets.length < 2) throw new AppError("VALIDATION", "这张图没有对应的大纲节，不会改用其他节。", 400);
       const next = seedDiagram(diagramId, section.bullets);
       db.prepare("UPDATE diagrams SET ir_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(next), now(), diagramId);
       return loadDiagram(db, diagramId);
     },
+    prepareGeneration: (projectId: string, input: { slotIds?: string[]; force?: boolean }) => {
+      const copy = requireCopy(db, projectId);
+      if (copy.status !== "confirmed" || copy.stale) throw new AppError("OUTLINE_NOT_APPROVED", "文字稿还未确认，或确认后又改过。请先确认文字。", 409);
+      const selected = new Set(input.slotIds ?? []);
+      const records = loadSlotRecords(db, projectId).filter((record) => !record.slot.detached && (selected.size === 0 || selected.has(record.slot.id)));
+      if (records.length === 0) throw new AppError("VALIDATION", "没有可绘制的占位。", 400);
+      return records.map((record) => ({ slotId: record.slot.id, slotVersion: record.updatedAt, force: Boolean(input.force) }));
+    },
+    recordGenerationRun: (projectId: string, jobId: string, idempotencyKey: string) => {
+      db.prepare(
+        `INSERT INTO generation_runs (id, project_id, status, created_at, external_job_id, idempotency_key, contract_version)
+         VALUES (?, ?, 'running', ?, ?, ?, 1)
+         ON CONFLICT(id) DO NOTHING`,
+      ).run(jobId, projectId, now(), jobId, idempotencyKey);
+    },
+    requireOwnedRun: (projectId: string, runId: string) => {
+      const row = db.prepare("SELECT id FROM generation_runs WHERE id = ? AND project_id = ?").get(runId, projectId);
+      if (!row) throw new AppError("NOT_FOUND", "没有找到这个项目的绘制任务。", 404);
+    },
+    executeJobItem: async (
+      projectId: string,
+      input: { slotId: string; expectedVersion: string; force?: boolean },
+      signal?: AbortSignal,
+    ) => {
+      const copy = requireCopy(db, projectId);
+      if (copy.status !== "confirmed" || copy.stale) throw new AppError("OUTLINE_NOT_APPROVED", "文字稿还未确认，或确认后又改过。请先确认文字。", 409);
+      const record = loadSlotRecord(db, projectId, input.slotId);
+      if (record.updatedAt !== input.expectedVersion) throw new AppError("STALE_SLOT", "占位已在绘制期间被修改，结果没有写入。", 409);
+      if (signal?.aborted) return { contractVersion: 1 as const, status: "cancelled" as const };
+      if (record.slot.status === "succeeded" && !input.force) return { contractVersion: 1 as const, status: "skipped" as const };
+      try {
+        const deck = view(projectId).deck;
+        const produced = await produceSlot(record.slot, mode, db, env, fetchImpl, deck.widthEmu, deck.heightEmu, signal);
+        persistProduced(db, projectId, record.slot, produced, input.expectedVersion, now());
+        return { contractVersion: 1 as const, status: "succeeded" as const };
+      } catch (error) {
+        if (error instanceof AppError && error.code === "STALE_SLOT") throw error;
+        if (signal?.aborted) return { contractVersion: 1 as const, status: "cancelled" as const };
+        const message = redactSecrets(error instanceof Error ? error.message : "绘制失败。", secretValues(db, env));
+        const code = error instanceof AppError ? error.code : "EXECUTION_FAILED";
+        persistFailure(db, projectId, record.slot, input.expectedVersion, message, now());
+        return { contractVersion: 1 as const, status: "failed" as const, errorCode: code, errorMessage: message };
+      }
+    },
   };
 }
 
-async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, env: Env, fetchImpl: FetchLike, widthEmu: number, heightEmu: number) {
+async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, env: Env, fetchImpl: FetchLike, widthEmu: number, heightEmu: number, signal?: AbortSignal) {
+  if (signal?.aborted) throw new AppError("CANCELLED", "已取消当前绘制。", 409);
   if (slot.outputType === "illustration") {
     const image = readCapability(db, env, "image");
     if (image.hasKey) {
-      const bytes = await generateImage({ baseUrl: image.baseUrl, apiKey: image.apiKey, model: image.model, prompt: `${slot.title}\n${slot.description}\n${slot.instruction}`, fetchImpl });
+      const bytes = await generateImage({
+        baseUrl: image.baseUrl,
+        apiKey: image.apiKey,
+        model: image.model,
+        prompt: `${slot.title}\n${slot.description}\n${slot.instruction}`,
+        fetchImpl,
+        trustedHosts: trustedHostsFromEnv(env),
+        signal,
+      });
       return { resultKind: "raster" as const, imageBase64: Buffer.from(bytes).toString("base64") };
     }
     if (mode === "live") throw new AppError("PROVIDER_CONFIG", "在线模式绘制插图需要单独配置插图接口，不会改用演示位图。", 400);
@@ -471,7 +529,7 @@ async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, 
     }
     return asset;
   }
-  if (mode === "live") return liveNative(slot, db, env, fetchImpl);
+  if (mode === "live") return liveNative(slot, db, env, fetchImpl, signal);
   const semantic = semanticFromSlot(slot);
   if ("diagram" in semantic) return { resultKind: "native" as const, diagram: semantic.diagram };
   if ("chart" in semantic) return { resultKind: "native" as const, chart: semantic.chart };
@@ -479,7 +537,7 @@ async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, 
   return { resultKind: "raster" as const, imageBase64: semantic.imageBase64 || DEMO_PNG_BASE64 };
 }
 
-async function liveNative(slot: Slot, db: DatabaseSync, env: Env, fetchImpl: FetchLike) {
+async function liveNative(slot: Slot, db: DatabaseSync, env: Env, fetchImpl: FetchLike, signal?: AbortSignal) {
   const text = readCapability(db, env, "text");
   if (!text.hasKey) throw new AppError("PROVIDER_CONFIG", "在线绘制需要文本接口。没有配置时不会改用演示数据。", 400);
   const payload = await chatJson({
@@ -487,6 +545,8 @@ async function liveNative(slot: Slot, db: DatabaseSync, env: Env, fetchImpl: Fet
     apiKey: text.apiKey,
     model: text.model,
     fetchImpl,
+    trustedHosts: trustedHostsFromEnv(env),
+    signal,
     system: "只返回 JSON。图：{\"labels\":[\"甲\",\"乙\"]}。图表：{\"categories\":[\"一月\"],\"values\":[10]}。表格：{\"headers\":[\"甲\",\"乙\"],\"rows\":[[\"1\",\"2\"]]}。",
     user: `类型 ${slot.outputType}\n标题 ${slot.title}\n描述 ${slot.description}\n说明 ${slot.instruction}`,
   });
@@ -520,8 +580,75 @@ function requireCopy(db: DatabaseSync, projectId: string): { status: "draft" | "
 }
 
 function loadSlots(db: DatabaseSync, projectId: string): Slot[] {
-  const rows = db.prepare("SELECT payload_json FROM slots WHERE project_id = ? ORDER BY updated_at").all(projectId) as Array<{ payload_json: string }>;
-  return rows.map((row) => JSON.parse(row.payload_json) as Slot);
+  return loadSlotRecords(db, projectId).map((record) => record.slot);
+}
+
+function loadSlotRecords(db: DatabaseSync, projectId: string): Array<{ slot: Slot; updatedAt: string }> {
+  const rows = db.prepare("SELECT payload_json, updated_at FROM slots WHERE project_id = ? ORDER BY updated_at").all(projectId) as Array<{ payload_json: string; updated_at: string }>;
+  return rows.map((row) => ({ slot: JSON.parse(row.payload_json) as Slot, updatedAt: row.updated_at }));
+}
+
+function loadSlotRecord(db: DatabaseSync, projectId: string, slotId: string): { slot: Slot; updatedAt: string } {
+  const row = db.prepare("SELECT payload_json, updated_at FROM slots WHERE id = ? AND project_id = ?").get(slotId, projectId) as
+    | { payload_json: string; updated_at: string }
+    | undefined;
+  if (!row) throw new AppError("NOT_FOUND", "没有找到这个占位。", 404);
+  return { slot: JSON.parse(row.payload_json) as Slot, updatedAt: row.updated_at };
+}
+
+function secretValues(db: DatabaseSync, env: Env): string[] {
+  return (["text", "vision", "image"] as const).map((capability) => readCapability(db, env, capability).apiKey).filter(Boolean);
+}
+
+function persistProduced(db: DatabaseSync, projectId: string, slot: Slot, produced: Awaited<ReturnType<typeof produceSlot>>, expectedVersion: string, stamp: string) {
+  withTransaction(db, () => {
+    const current = db.prepare("SELECT updated_at FROM slots WHERE id = ? AND project_id = ?").get(slot.id, projectId) as { updated_at: string } | undefined;
+    if (!current || current.updated_at !== expectedVersion) throw new AppError("STALE_SLOT", "占位已在绘制期间被修改，结果没有写入。", 409);
+    const diagramValue = "diagram" in produced ? produced.diagram : undefined;
+    const diagramId = diagramValue ? slot.diagramId ?? randomUUID() : undefined;
+    if (diagramValue && diagramId) {
+      const diagram = { ...diagramValue, id: diagramId };
+      const exists = db.prepare("SELECT id FROM diagrams WHERE id = ?").get(diagramId);
+      if (exists) db.prepare("UPDATE diagrams SET ir_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(diagram), stamp, diagramId);
+      else db.prepare("INSERT INTO diagrams (id, project_id, ir_json, updated_at) VALUES (?, ?, ?, ?)").run(diagramId, projectId, JSON.stringify(diagram), stamp);
+    }
+    const next: Slot = {
+      ...slot,
+      status: "succeeded",
+      stale: false,
+      error: undefined,
+      resultKind: produced.resultKind,
+      diagramId,
+      chart: "chart" in produced ? produced.chart : undefined,
+      table: "table" in produced ? produced.table : undefined,
+      imageBase64: "imageBase64" in produced ? produced.imageBase64 : "pngBase64" in produced ? produced.pngBase64 : undefined,
+      svg: "svg" in produced ? produced.svg : undefined,
+    };
+    const result = db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ? AND project_id = ? AND updated_at = ?").run(
+      JSON.stringify(next),
+      stamp,
+      slot.id,
+      projectId,
+      expectedVersion,
+    );
+    if (result.changes !== 1) throw new AppError("STALE_SLOT", "占位已在绘制期间被修改，结果没有写入。", 409);
+  });
+}
+
+function persistFailure(db: DatabaseSync, projectId: string, slot: Slot, expectedVersion: string, message: string, stamp: string) {
+  withTransaction(db, () => {
+    const current = db.prepare("SELECT updated_at FROM slots WHERE id = ? AND project_id = ?").get(slot.id, projectId) as { updated_at: string } | undefined;
+    if (!current || current.updated_at !== expectedVersion) throw new AppError("STALE_SLOT", "占位已在绘制期间被修改，结果没有写入。", 409);
+    const next: Slot = { ...slot, status: "failed", error: message.slice(0, 300) };
+    const result = db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ? AND project_id = ? AND updated_at = ?").run(
+      JSON.stringify(next),
+      stamp,
+      slot.id,
+      projectId,
+      expectedVersion,
+    );
+    if (result.changes !== 1) throw new AppError("STALE_SLOT", "占位已在绘制期间被修改，结果没有写入。", 409);
+  });
 }
 
 function mustSlot(db: DatabaseSync, projectId: string, slotId: string): Slot {

@@ -54,7 +54,14 @@ export function openDatabase(filename: string): DatabaseSync {
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       status TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      external_job_id TEXT,
+      idempotency_key TEXT,
+      contract_version INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS provider_profiles (
       capability TEXT PRIMARY KEY,
@@ -79,7 +86,27 @@ export function openDatabase(filename: string): DatabaseSync {
   ensureColumn(db, "projects", "height_emu", "INTEGER NOT NULL DEFAULT 6858000");
   ensureColumn(db, "projects", "template_id", "TEXT NOT NULL DEFAULT 'none'");
   ensureColumn(db, "projects", "properties_confirmed", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "generation_runs", "external_job_id", "TEXT");
+  ensureColumn(db, "generation_runs", "idempotency_key", "TEXT");
+  ensureColumn(db, "generation_runs", "contract_version", "INTEGER");
+  const applied = db.prepare("SELECT version FROM schema_migrations").all() as Array<{ version: number }>;
+  const has = (version: number) => applied.some((row) => row.version === version);
+  const stamp = new Date().toISOString();
+  if (!has(1)) db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)").run(stamp);
+  if (!has(2)) db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(stamp);
   return db;
+}
+
+export function withTransaction<T>(db: DatabaseSync, run: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = run();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string) {

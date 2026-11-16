@@ -1,12 +1,18 @@
 import { mkdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
+const artifacts = process.env.ARTIFACT_DIR || "/opt/cursor/artifacts";
+
+function artifact(name: string) {
+  return `${artifacts}/${name}`;
+}
+
 test("六步：说明、大纲、属性、文字、编辑、配图导出", async ({ page }) => {
-  mkdirSync("/opt/cursor/artifacts", { recursive: true });
+  mkdirSync(artifacts, { recursive: true });
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "把说明写成大纲。" })).toBeVisible();
-  await page.screenshot({ path: "/opt/cursor/artifacts/home.png", fullPage: true });
+  await page.screenshot({ path: artifact("home.png"), fullPage: true });
   const prompt = `社区图书角三个月试点。${"借阅".repeat(4500)}`;
   expect(prompt.length).toBeGreaterThan(8000);
   await page.getByLabel("生成说明").fill(prompt);
@@ -20,7 +26,7 @@ test("六步：说明、大纲、属性、文字、编辑、配图导出", async
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("大纲 Markdown")).toHaveValue(/居民借阅/);
-  await page.screenshot({ path: "/opt/cursor/artifacts/outline.png", fullPage: true });
+  await page.screenshot({ path: artifact("outline.png"), fullPage: true });
   await page.getByRole("button", { name: "优化整份大纲" }).click();
   await expect(page.getByText("社区图书角三个月试点（收紧）")).toBeVisible();
   await page.getByRole("button", { name: "采用优化" }).click();
@@ -31,7 +37,7 @@ test("六步：说明、大纲、属性、文字、编辑、配图导出", async
   await page.getByRole("button", { name: "讲义" }).click();
   await page.getByRole("button", { name: "确认属性" }).click();
   await expect(page.getByText("属性已确认。")).toBeVisible();
-  await page.screenshot({ path: "/opt/cursor/artifacts/templates.png", fullPage: true });
+  await page.screenshot({ path: artifact("templates.png"), fullPage: true });
 
   await page.getByRole("link", { name: "内容" }).click();
   await page.getByRole("button", { name: "生成幻灯片文字" }).click();
@@ -44,19 +50,67 @@ test("六步：说明、大纲、属性、文字、编辑、配图导出", async
   await page.getByRole("link", { name: "编辑" }).click();
   await page.getByRole("button", { name: "添加占位" }).click();
   await expect(page.getByText("已添加占位")).toBeVisible();
-  await page.screenshot({ path: "/opt/cursor/artifacts/editor.png", fullPage: true });
+  await page.screenshot({ path: artifact("editor.png"), fullPage: true });
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.screenshot({ path: "/opt/cursor/artifacts/editor-narrow.png", fullPage: true });
+  await page.screenshot({ path: artifact("editor-narrow.png"), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByRole("link", { name: "配图" }).click();
   await page.getByLabel("选择 借阅流程").check();
   await page.getByRole("button", { name: "绘制所选" }).click();
+  await expect(page.getByText(/绘制中/)).toBeVisible();
+  await page.screenshot({ path: artifact("job-progress.png"), fullPage: true });
   await expect(page.getByText("原生可编辑")).toBeVisible();
   await page.getByRole("button", { name: "绘制所选" }).click();
   await expect(page.getByText("已跳过已完成的占位。")).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 PPTX" }).click();
-  await (await download).saveAs("/opt/cursor/artifacts/sample-editable.pptx");
-  await page.screenshot({ path: "/opt/cursor/artifacts/illustrate.png", fullPage: true });
+  await (await download).saveAs(artifact("sample-editable.pptx"));
+  await page.screenshot({ path: artifact("illustrate.png"), fullPage: true });
+
+  await page.route(/\/api\/projects\/[^/]+\/generate$/, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "WORKER_UNAVAILABLE", message: "批量绘制服务没有启动。已保存的页面和占位没有改动。" }),
+    });
+  });
+  await page.getByRole("button", { name: "绘制全部" }).click();
+  await expect(page.getByText("批量绘制服务没有启动。已保存的页面和占位没有改动。")).toBeVisible();
+  await page.screenshot({ path: artifact("job-error.png"), fullPage: true });
+  await page.unroute(/\/api\/projects\/[^/]+\/generate$/);
+
+  await page.route(/\/generate/, async (route) => {
+    const url = route.request().url();
+    if (route.request().method() === "POST" && url.endsWith("/generate")) {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ runId: "job-recover", status: "queued", items: [] }),
+      });
+      return;
+    }
+    if (url.includes("/generate/job-recover")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          contractVersion: 1,
+          jobId: "job-recover",
+          projectId: "p",
+          status: "interrupted",
+          items: [{ slotId: "slot", status: "interrupted", errorMessage: "进程重启或租约过期，进行中的调用已中断，不会自动重试。" }],
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "绘制全部" }).click();
+  await expect(page.getByText("绘制被中断。已完成的占位会保留，未完成项不会自动重试。")).toBeVisible();
+  await page.screenshot({ path: artifact("job-recovery.png"), fullPage: true });
 });
