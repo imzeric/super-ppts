@@ -5,7 +5,7 @@ rmSync("data/e2e.db", { force: true });
 
 export default defineConfig({
   testDir: "e2e",
-  timeout: 60_000,
+  timeout: 90_000,
   use: {
     ...devices["Desktop Chrome"],
     baseURL: "http://127.0.0.1:3456",
@@ -13,7 +13,7 @@ export default defineConfig({
   webServer: {
     command: "bash scripts/e2e-server.sh",
     port: 3456,
-    timeout: 120_000,
+    timeout: 180_000,
     reuseExistingServer: false,
     env: {
       DATABASE_PATH: `${process.cwd()}/data/e2e.db`,

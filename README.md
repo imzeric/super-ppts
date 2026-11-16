@@ -97,6 +97,8 @@ pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
+GitHub Actions 还会跑同一套浏览器端到端测试，以及 `docker compose build` 后的启动检查。容器检查只确认网页能打开，并且 `/api/health` 里绘制服务为 `up`。它不在容器里走完生成和导出。
+
 生产进程：
 
 ```bash
