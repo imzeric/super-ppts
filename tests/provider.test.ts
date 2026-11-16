@@ -29,6 +29,7 @@ describe("resolveProvider", () => {
     const resolved = resolveProvider(
       { AI_API_KEY: "KEY123", AI_BASE_URL: "https://example.test/v1", AI_MODEL: "demo-model" },
       fetchImpl,
+      async () => ["1.1.1.1"],
     );
     expect(resolved.mode).toBe("live");
     await expect(resolved.provider.generateMarkdown({ background: "背景" })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
@@ -54,6 +55,7 @@ describe("resolveProvider", () => {
     const resolved = resolveProvider(
       { AI_API_KEY: "KEY123", AI_BASE_URL: "https://example.test/v1", AI_MODEL: "demo-model" },
       fetchImpl,
+      async () => ["1.1.1.1"],
     );
     await expect(resolved.provider.generateMarkdown({ background: "背景" })).rejects.toMatchObject({ code: "PROVIDER_SCHEMA" });
     const init = fetchImpl.mock.calls[0]?.[1];

@@ -52,6 +52,8 @@ test("六步：说明、大纲、属性、文字、编辑、配图导出", async
   await page.getByRole("link", { name: "配图" }).click();
   await page.getByLabel("选择 借阅流程").check();
   await page.getByRole("button", { name: "绘制所选" }).click();
+  await expect(page.getByText(/绘制中/)).toBeVisible();
+  await page.screenshot({ path: "/opt/cursor/artifacts/job-progress.png", fullPage: true });
   await expect(page.getByText("原生可编辑")).toBeVisible();
   await page.getByRole("button", { name: "绘制所选" }).click();
   await expect(page.getByText("已跳过已完成的占位。")).toBeVisible();
@@ -59,4 +61,50 @@ test("六步：说明、大纲、属性、文字、编辑、配图导出", async
   await page.getByRole("button", { name: "导出 PPTX" }).click();
   await (await download).saveAs("/opt/cursor/artifacts/sample-editable.pptx");
   await page.screenshot({ path: "/opt/cursor/artifacts/illustrate.png", fullPage: true });
+
+  await page.route(/\/api\/projects\/[^/]+\/generate$/, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "WORKER_UNAVAILABLE", message: "批量绘制服务没有启动。已保存的页面和占位没有改动。" }),
+    });
+  });
+  await page.getByRole("button", { name: "绘制全部" }).click();
+  await expect(page.getByText("批量绘制服务没有启动。已保存的页面和占位没有改动。")).toBeVisible();
+  await page.screenshot({ path: "/opt/cursor/artifacts/job-error.png", fullPage: true });
+  await page.unroute(/\/api\/projects\/[^/]+\/generate$/);
+
+  await page.route(/\/generate/, async (route) => {
+    const url = route.request().url();
+    if (route.request().method() === "POST" && url.endsWith("/generate")) {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ runId: "job-recover", status: "queued", items: [] }),
+      });
+      return;
+    }
+    if (url.includes("/generate/job-recover")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          contractVersion: 1,
+          jobId: "job-recover",
+          projectId: "p",
+          status: "interrupted",
+          items: [{ slotId: "slot", status: "interrupted", errorMessage: "进程重启或租约过期，进行中的调用已中断，不会自动重试。" }],
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "绘制全部" }).click();
+  await expect(page.getByText("绘制被中断。已完成的占位会保留，未完成项不会自动重试。")).toBeVisible();
+  await page.screenshot({ path: "/opt/cursor/artifacts/job-recovery.png", fullPage: true });
 });

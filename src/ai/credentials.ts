@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { AppError } from "../domain/errors";
+import { assertProviderUrl } from "./guard";
+
+export { assertProviderUrl, assertResolvedProviderUrl, trustedHostsFromEnv } from "./guard";
 
 export type Capability = "text" | "vision" | "image";
 
@@ -17,19 +20,6 @@ export type ResolvedCapability = CapabilityView & { apiKey: string };
 type Env = Record<string, string | undefined>;
 
 const CAPABILITIES: Capability[] = ["text", "vision", "image"];
-
-export function assertProviderUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new AppError("VALIDATION", "接口地址必须是完整的 http 或 https URL。", 400);
-  }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.username || url.password) throw new AppError("VALIDATION", "接口地址里不能带账号或密码。", 400);
-  if (url.protocol === "https:" || (url.protocol === "http:" && local)) return url.toString().replace(/\/$/, "");
-  throw new AppError("VALIDATION", "除本机外，接口地址只接受 https。", 400);
-}
 
 export function maskKey(key: string): string | null {
   if (!key) return null;
@@ -72,9 +62,10 @@ export function listCapabilities(db: DatabaseSync | undefined, env: Env): Capabi
 export function saveCapability(
   db: DatabaseSync,
   input: { capability: Capability; baseUrl: string; model: string; apiKey?: string },
+  trustedHosts: string[] = [],
 ): CapabilityView {
   if (!CAPABILITIES.includes(input.capability)) throw new AppError("VALIDATION", "能力只能是 text、vision 或 image。", 400);
-  const baseUrl = input.baseUrl.trim() ? assertProviderUrl(input.baseUrl.trim()) : "";
+  const baseUrl = input.baseUrl.trim() ? assertProviderUrl(input.baseUrl.trim(), trustedHosts) : "";
   const model = input.model.trim();
   const existing = db.prepare("SELECT api_key FROM provider_profiles WHERE capability = ?").get(input.capability) as { api_key: string } | undefined;
   const nextKey = input.apiKey && input.apiKey.trim() ? input.apiKey.trim() : (existing?.api_key ?? "");

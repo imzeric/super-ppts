@@ -1,4 +1,5 @@
 import { listCapabilities, saveCapability, type Capability } from "@/ai/credentials";
+import { trustedHostsFromEnv } from "@/ai/guard";
 import { errorResponse } from "@/server/http";
 import { getDatabase } from "@/server/runtime";
 
@@ -16,7 +17,7 @@ export async function PUT(request: Request) {
       baseUrl: body.baseUrl ?? "",
       model: body.model ?? "",
       apiKey: body.apiKey,
-    });
+    }, trustedHostsFromEnv(process.env));
     return Response.json(profile);
   } catch (error) {
     return errorResponse(error);
