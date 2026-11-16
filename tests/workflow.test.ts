@@ -13,6 +13,7 @@ function services(mode?: "demo" | "live") {
 async function ready(api: ReturnType<typeof services>["api"]) {
   const created = await api.createProject({ background: "社区图书角试点" });
   api.confirmOutline(created.project.id);
+  api.confirmDeck(created.project.id);
   api.generateCopy(created.project.id);
   api.confirmCopy(created.project.id);
   return created.project.id;

@@ -55,11 +55,16 @@ export type Slot = {
   description: string;
   instruction: string;
   outputType: OutputType;
+  sourceKind?: "native" | "mermaid" | "antv" | "chart" | "image";
+  sourceText?: string;
+  outputMode?: "png" | "svg" | "native";
   status: "empty" | "succeeded" | "failed";
   stale: boolean;
   error?: string;
   diagramId?: string;
-  resultKind?: "native" | "raster";
+  imageBase64?: string;
+  svg?: string;
+  resultKind?: "native" | "raster" | "vector";
 };
 
 export type ProjectView = {
@@ -78,4 +83,5 @@ export type ProjectView = {
   copy: null | { status: "draft" | "confirmed"; stale: boolean; slides: SlideCopy[] };
   slots: Slot[];
   diagrams: Array<{ id: string; label: string }>;
+  deck: { aspect: string; widthEmu: number; heightEmu: number; templateId: string; confirmed: boolean };
 };

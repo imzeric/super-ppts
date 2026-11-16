@@ -22,7 +22,15 @@ export type ExportSlide =
   | { kind: "chart"; title: string; chart: ChartSpec }
   | { kind: "composed"; title: string; lines: string[]; slots: ComposedSlot[] };
 
-export type ExportDeck = { title: string; slides: ExportSlide[] };
+export type DeckTheme = { ink: string; paper: string; accent: string; font: string; titleSize: number };
+
+export type ExportDeck = {
+  title: string;
+  slides: ExportSlide[];
+  widthEmu?: number;
+  heightEmu?: number;
+  theme?: DeckTheme;
+};
 
 const SHAPES: Record<ShapeName, keyof typeof PptxGenJS.ShapeType> = {
   rect: "rect",
@@ -37,9 +45,15 @@ function inches(emu: number): number {
 
 export async function buildPptx(deck: ExportDeck): Promise<Uint8Array> {
   const pptx = new PptxGenJS();
-  pptx.layout = "LAYOUT_WIDE";
+  const widthEmu = deck.widthEmu ?? 12_192_000;
+  const heightEmu = deck.heightEmu ?? 6_858_000;
+  if (widthEmu === 12_192_000 && heightEmu === 6_858_000) pptx.layout = "LAYOUT_WIDE";
+  else {
+    pptx.defineLayout({ name: "DECK", width: widthEmu / 914400, height: heightEmu / 914400 });
+    pptx.layout = "DECK";
+  }
   pptx.title = deck.title;
-  pptx.theme = { headFontFace: FONT, bodyFontFace: FONT };
+  pptx.theme = { headFontFace: deck.theme?.font ?? FONT, bodyFontFace: deck.theme?.font ?? FONT };
 
   for (const spec of deck.slides) {
     const slide = pptx.addSlide();
@@ -101,7 +115,7 @@ export async function buildPptx(deck: ExportDeck): Promise<Uint8Array> {
         });
       }
     }
-    if (spec.kind === "composed") renderComposed(slide, pptx, spec);
+    if (spec.kind === "composed") renderComposed(slide, pptx, spec, deck.theme);
     if (spec.kind === "chart") {
       const type = spec.chart.type === "line" ? pptx.ChartType.line : spec.chart.type === "pie" ? pptx.ChartType.pie : pptx.ChartType.bar;
       slide.addChart(
@@ -139,8 +153,17 @@ export async function buildPptx(deck: ExportDeck): Promise<Uint8Array> {
   );
 }
 
-function renderComposed(slide: ReturnType<PptxGenJS["addSlide"]>, pptx: PptxGenJS, spec: Extract<ExportSlide, { kind: "composed" }>) {
-  slide.addText(spec.title, textBox(0.55, 0.28, 12.2, 0.6, 26, "slide-title"));
+function renderComposed(
+  slide: ReturnType<PptxGenJS["addSlide"]>,
+  pptx: PptxGenJS,
+  spec: Extract<ExportSlide, { kind: "composed" }>,
+  theme?: DeckTheme,
+) {
+  const font = theme?.font ?? FONT;
+  const ink = theme?.ink ?? INK;
+  const paper = theme?.paper ?? PAPER;
+  slide.background = { color: paper };
+  slide.addText(spec.title, { ...textBox(0.55, 0.28, 12.2, 0.6, theme?.titleSize ?? 26, "slide-title"), fontFace: font, color: ink });
   if (spec.lines.length > 0) {
     slide.addText(spec.lines.map((text) => ({ text, options: { breakLine: true } })), {
       ...textBox(0.55, 0.95, 12.2, 1.1, 16, "slide-copy"),

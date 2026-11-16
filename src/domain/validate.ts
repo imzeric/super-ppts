@@ -81,7 +81,7 @@ const sectionSchema = z
 const outlineSchema = z
   .array(sectionSchema)
   .min(LIMITS.sectionsMin, `大纲至少要有 ${LIMITS.sectionsMin} 节。`)
-  .max(LIMITS.sectionsMax, `首版一次最多 ${LIMITS.sectionsMax} 节，方便逐张核对原生对象。`);
+  .max(LIMITS.sectionsMax, `一次最多解析 ${LIMITS.sectionsMax} 张幻灯片。原文会完整保留，超出的部分不会悄悄删掉，但需要拆开后再确认。`);
 
 const diagramSchema = z
   .object({
@@ -165,7 +165,7 @@ export function parseDiagram(input: unknown): Diagram {
 }
 
 export function parseSourceText(input: unknown): string {
-  const parsed = z.string().trim().min(1, "请先写下主题或粘贴内容。").max(LIMITS.sourceText, `内容最多 ${LIMITS.sourceText} 个字。`).safeParse(input);
+  const parsed = z.string().trim().min(1, "请先写下生成说明。").max(LIMITS.transportText, "超过单次传输上限 100 万字，内容没有被截断保存。请分成多份再试。").safeParse(input);
   if (!parsed.success) fail(parsed.error, "VALIDATION");
   return parsed.data;
 }

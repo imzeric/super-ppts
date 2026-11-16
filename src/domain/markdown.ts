@@ -24,9 +24,9 @@ export function parseMarkdownOutline(source: string): MarkdownOutline {
   });
   if (!title) issues.push({ line: 1, message: "文稿需要一个一级标题，例如 # 社区图书角。" });
   if (headingAt.length === 0) issues.push({ line: 1, message: "至少用一个 ## 标题表示一张幻灯片。" });
-  if (headingAt.length > 8) issues.push({ line: headingAt[8]! + 1, message: "一次最多 8 张幻灯片，便于分步确认文字和占位。" });
+  if (headingAt.length > 40) issues.push({ line: headingAt[40]! + 1, message: "一次最多解析 40 张幻灯片。原文已保留，超出的页不会被静默删除，请拆开后再确认。" });
 
-  const sections = headingAt.slice(0, 8).map((start, index) => readSection(lines, start, headingAt[index + 1] ?? lines.length, index, issues));
+  const sections = headingAt.slice(0, 40).map((start, index) => readSection(lines, start, headingAt[index + 1] ?? lines.length, index, issues));
   if (issues.length === 0 && sections.length > 0) {
     try {
       parseOutline(sections);

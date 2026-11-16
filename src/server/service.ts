@@ -4,6 +4,8 @@ import { readCapability } from "../ai/credentials";
 import { DEMO_PNG_BASE64, demoPngBytes, generateImage } from "../ai/media";
 import { chatJson, type FetchLike, type OutlineProvider } from "../ai/provider";
 import { semanticFromSlot } from "../ai/semantic";
+import { assetFromSource } from "../render/asset";
+import { findSize, findTemplate } from "../templates/library";
 import { AppError } from "../domain/errors";
 import { layoutDiagram, seedByIntent, seedDiagram } from "../domain/layout";
 import { parseMarkdownOutline } from "../domain/markdown";
@@ -31,6 +33,7 @@ export type ProjectView = {
   copy: null | { status: "draft" | "confirmed"; stale: boolean; slides: SlideCopy[] };
   slots: Slot[];
   diagrams: Array<{ id: string; label: string }>;
+  deck: { aspect: string; widthEmu: number; heightEmu: number; templateId: string; confirmed: boolean };
 };
 
 type VersionRow = {
@@ -77,7 +80,16 @@ export function createServices(
 
   const view = (projectId: string): ProjectView => {
     const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as
-      | { id: string; title: string; source_text: string }
+      | {
+          id: string;
+          title: string;
+          source_text: string;
+          aspect?: string;
+          width_emu?: number;
+          height_emu?: number;
+          template_id?: string;
+          properties_confirmed?: number;
+        }
       | undefined;
     if (!project) throw new AppError("NOT_FOUND", "没有找到这份文稿。", 404);
     const current = oneVersion(projectId, "current");
@@ -103,6 +115,13 @@ export function createServices(
       copy: copy ? { status: copy.status, stale: copy.stale === 1, slides: JSON.parse(copy.slides_json) as SlideCopy[] } : null,
       slots: loadSlots(db, projectId),
       diagrams: diagrams.map((row) => ({ id: row.id, label: labelOf(row.ir_json) })),
+      deck: {
+        aspect: project.aspect || "16:9",
+        widthEmu: Number(project.width_emu || 12_192_000),
+        heightEmu: Number(project.height_emu || 6_858_000),
+        templateId: project.template_id || "none",
+        confirmed: project.properties_confirmed === 1,
+      },
     };
   };
 
@@ -135,7 +154,9 @@ export function createServices(
     },
     getProject: (projectId: string) => view(projectId),
     updateMarkdown: (projectId: string, markdown: string) => {
-      if (markdown.length < 1 || markdown.length > 20_000) throw new AppError("VALIDATION", "大纲需要 1 到 20000 个字符。", 400);
+      if (markdown.length < 1 || markdown.length > 1_000_000) {
+        throw new AppError("VALIDATION", "大纲超过单次传输上限 100 万字，没有被截断保存。", 400);
+      }
       const current = oneVersion(projectId, "current");
       const parsed = parseMarkdownOutline(markdown);
       if (current.status === "confirmed" && current.markdown !== markdown) markDownstreamStale(projectId);
@@ -187,7 +208,37 @@ export function createServices(
       db.prepare("UPDATE outline_versions SET status = 'confirmed', sections_json = ? WHERE id = ?").run(JSON.stringify(parsed.sections), current.id);
       return view(projectId);
     },
+    updateDeck: (projectId: string, input: { aspect?: string; templateId?: string }) => {
+      const current = view(projectId).deck;
+      const size = findSize(input.aspect ?? current.aspect);
+      const template = findTemplate(input.templateId ?? current.templateId);
+      for (const slot of loadSlots(db, projectId)) {
+        const next = {
+          ...slot,
+          x: clampSlot(Math.round((slot.x * size.widthEmu) / current.widthEmu), size.widthEmu - 600_000),
+          y: clampSlot(Math.round((slot.y * size.heightEmu) / current.heightEmu), size.heightEmu - 400_000),
+          w: Math.min(size.widthEmu, Math.max(600_000, Math.round((slot.w * size.widthEmu) / current.widthEmu))),
+          h: Math.min(size.heightEmu, Math.max(400_000, Math.round((slot.h * size.heightEmu) / current.heightEmu))),
+        };
+        db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(next), now(), slot.id);
+      }
+      db.prepare("UPDATE projects SET aspect = ?, width_emu = ?, height_emu = ?, template_id = ?, properties_confirmed = 0 WHERE id = ?").run(
+        size.id,
+        size.widthEmu,
+        size.heightEmu,
+        template.id,
+        projectId,
+      );
+      return view(projectId);
+    },
+    confirmDeck: (projectId: string) => {
+      requireConfirmedOutline(projectId);
+      db.prepare("UPDATE projects SET properties_confirmed = 1 WHERE id = ?").run(projectId);
+      return view(projectId);
+    },
     generateCopy: (projectId: string) => {
+      const project = view(projectId);
+      if (!project.deck.confirmed) throw new AppError("OUTLINE_NOT_APPROVED", "请先确认幻灯片比例和模板。不选模板也可以确认。", 409);
       const parsed = requireConfirmedOutline(projectId);
       const slides = parsed.sections.map(toCopy);
       const existing = db.prepare("SELECT project_id FROM slide_copies WHERE project_id = ?").get(projectId);
@@ -282,7 +333,8 @@ export function createServices(
           continue;
         }
         try {
-          const produced = await produceSlot(slot, mode, db, env, fetchImpl);
+          const deck = view(projectId).deck;
+          const produced = await produceSlot(slot, mode, db, env, fetchImpl, deck.widthEmu, deck.heightEmu);
           const diagramValue = "diagram" in produced ? produced.diagram : undefined;
           const diagramId = diagramValue ? slot.diagramId ?? randomUUID() : undefined;
           if (diagramValue && diagramId) {
@@ -300,7 +352,8 @@ export function createServices(
             diagramId,
             chart: "chart" in produced ? produced.chart : undefined,
             table: "table" in produced ? produced.table : undefined,
-            imageBase64: "imageBase64" in produced ? produced.imageBase64 : undefined,
+            imageBase64: "imageBase64" in produced ? produced.imageBase64 : "pngBase64" in produced ? produced.pngBase64 : undefined,
+            svg: "svg" in produced ? produced.svg : undefined,
           };
           db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(next), now(), slot.id);
           results.push({ id: slot.id, status: "succeeded" });
@@ -322,6 +375,7 @@ export function createServices(
     exportProject: async (projectId: string) => {
       const copy = requireCopy(db, projectId);
       requireConfirmedOutline(projectId);
+      if (!view(projectId).deck.confirmed) throw new AppError("OUTLINE_NOT_APPROVED", "请先确认幻灯片比例。不使用模板也可以确认。", 409);
       if (copy.status !== "confirmed" || copy.stale) {
         throw new AppError("OUTLINE_NOT_APPROVED", "文字稿还未确认，或上游改动后还没核对。请确认文字，或明确保留现有内容。", 409);
       }
@@ -329,7 +383,8 @@ export function createServices(
       if (slots.some((slot) => slot.stale)) {
         throw new AppError("OUTLINE_NOT_APPROVED", "有占位还待核对。可以保留现有占位，或调整后再导出。", 409);
       }
-      const deck = toExportDeck(db, view(projectId).project.title, copy.slides, slots);
+      const project = view(projectId);
+      const deck = toExportDeck(db, project.project.title, copy.slides, slots, project.deck);
       const bytes = await buildPptx(deck);
       db.prepare("INSERT INTO export_jobs (id, project_id, deck_id, status, error_code, byte_size, created_at) VALUES (?, ?, ?, 'succeeded', NULL, ?, ?)").run(
         randomUUID(),
@@ -367,7 +422,7 @@ export function createServices(
   };
 }
 
-async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, env: Env, fetchImpl: FetchLike) {
+async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, env: Env, fetchImpl: FetchLike, widthEmu: number, heightEmu: number) {
   if (slot.outputType === "illustration") {
     const image = readCapability(db, env, "image");
     if (image.hasKey) {
@@ -376,6 +431,17 @@ async function produceSlot(slot: Slot, mode: "demo" | "live", db: DatabaseSync, 
     }
     if (mode === "live") throw new AppError("PROVIDER_CONFIG", "在线模式绘制插图需要单独配置插图接口，不会改用演示位图。", 400);
     return { resultKind: "raster" as const, imageBase64: Buffer.from(demoPngBytes()).toString("base64") };
+  }
+  if (slot.sourceKind && slot.sourceKind !== "native") {
+    if (mode === "live" && slot.sourceKind !== "image") {
+      throw new AppError("PROVIDER_CONFIG", "在线模式不会用演示解析冒充模型成功。请使用已配置的文本接口，或切回演示模式。", 400);
+    }
+    const asset = assetFromSource(slot, widthEmu, heightEmu);
+    if (asset.resultKind === "raster" && !asset.pngBase64) {
+      if (mode === "live") throw new AppError("PROVIDER_CONFIG", "在线插图需要插图接口，不会改用演示位图。", 400);
+      return { resultKind: "raster" as const, imageBase64: Buffer.from(demoPngBytes()).toString("base64") };
+    }
+    return asset;
   }
   if (mode === "live") return liveNative(slot, db, env, fetchImpl);
   const semantic = semanticFromSlot(slot);
@@ -464,9 +530,23 @@ function labelOf(json: string): string {
   }
 }
 
-function toExportDeck(db: DatabaseSync, title: string, slides: SlideCopy[], slots: Slot[]): ExportDeck {
+function clampSlot(value: number, max: number) {
+  return Math.min(Math.max(0, value), Math.max(0, max));
+}
+
+function toExportDeck(
+  db: DatabaseSync,
+  title: string,
+  slides: SlideCopy[],
+  slots: Slot[],
+  deck: { widthEmu: number; heightEmu: number; templateId: string },
+): ExportDeck {
+  const template = findTemplate(deck.templateId);
   return {
     title,
+    widthEmu: deck.widthEmu,
+    heightEmu: deck.heightEmu,
+    theme: { ink: template.ink, paper: template.paper, accent: template.accent, font: template.font, titleSize: template.titleSize },
     slides: slides.map((slide) => ({
       kind: "composed" as const,
       title: slide.title,
@@ -483,8 +563,8 @@ function toComposed(db: DatabaseSync, slot: Slot): ComposedSlot {
   }
   if (slot.status === "succeeded" && slot.chart) return { ...frame, mode: "chart", chart: slot.chart };
   if (slot.status === "succeeded" && slot.table) return { ...frame, mode: "table", table: slot.table };
-  if (slot.status === "succeeded" && slot.resultKind === "raster" && slot.imageBase64) {
-    return { ...frame, mode: "illustration", pngBase64: slot.imageBase64, title: slot.title };
+  if (slot.status === "succeeded" && (slot.resultKind === "raster" || slot.resultKind === "vector") && slot.imageBase64) {
+    return { ...frame, mode: "illustration", pngBase64: slot.imageBase64, title: slot.resultKind === "vector" ? `${slot.title}（SVG 预览）` : slot.title };
   }
   return { ...frame, mode: "placeholder", title: slot.title, outputType: slot.outputType, description: slot.description, instruction: slot.instruction };
 }

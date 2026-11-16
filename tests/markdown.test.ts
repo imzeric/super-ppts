@@ -16,9 +16,10 @@ describe("parseMarkdownOutline", () => {
     expect(parsed.issues.some((issue) => issue.line === 3 && issue.message.includes("kind"))).toBe(true);
   });
 
-  it("rejects a ninth slide", () => {
-    const slides = Array.from({ length: 9 }, (_, index) => `## 第${index}页\nkind: bullets\n- 要点`).join("\n");
-    const parsed = parseMarkdownOutline(`# 太多\n${slides}\n`);
-    expect(parsed.issues.some((issue) => issue.message.includes("8"))).toBe(true);
+  it("keeps a ninth slide and explains the 40-slide bound", () => {
+    const nine = Array.from({ length: 9 }, (_, index) => `## 第${index}页\nkind: bullets\n- 要点`).join("\n");
+    expect(parseMarkdownOutline(`# 九页\n${nine}\n`).issues).toEqual([]);
+    const tooMany = Array.from({ length: 41 }, (_, index) => `## 第${index}页\nkind: bullets\n- 要点`).join("\n");
+    expect(parseMarkdownOutline(`# 太多\n${tooMany}\n`).issues.some((issue) => issue.message.includes("40"))).toBe(true);
   });
 });

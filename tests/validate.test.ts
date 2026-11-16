@@ -15,14 +15,21 @@ describe("parseOutline", () => {
     }
   });
 
-  it("rejects a ninth section", () => {
-    const sections = Array.from({ length: 9 }, (_, index) => ({
+  it("accepts nine sections and rejects a forty-first", () => {
+    const nine = Array.from({ length: 9 }, (_, index) => ({
       id: `s${index}`,
-      kind: "bullets",
+      kind: "bullets" as const,
       title: `第${index}节`,
       bullets: ["要点"],
     }));
-    expect(() => parseOutline(sections)).toThrowError(expect.objectContaining({ code: "VALIDATION" }));
+    expect(parseOutline(nine)).toHaveLength(9);
+    const tooMany = Array.from({ length: 41 }, (_, index) => ({
+      id: `s${index}`,
+      kind: "bullets" as const,
+      title: `第${index}节`,
+      bullets: ["要点"],
+    }));
+    expect(() => parseOutline(tooMany)).toThrowError(expect.objectContaining({ code: "VALIDATION" }));
   });
 
   it("rejects a pie chart with two series", () => {

@@ -22,15 +22,14 @@ export default function CopyPage() {
       .catch((reason: Error) => setError(reason.message));
   }, [params.id]);
 
-  if (!view && !error) return <Frame step="copy"><p role="status">正在读取文字稿…</p></Frame>;
-  if (!view) return <Frame step="copy"><p className="alert" role="alert">{error}</p></Frame>;
+  if (!view && !error) return <Frame step="content"><p role="status">正在读取文字稿…</p></Frame>;
+  if (!view) return <Frame step="content"><p className="alert" role="alert">{error}</p></Frame>;
 
   return (
-    <Frame mode={view.mode} step="copy" projectId={params.id}>
+    <Frame mode={view.mode} step="content" projectId={params.id}>
       <section className="sheet">
-        <p className="kicker">第二步 · {view.copy?.status === "confirmed" ? "文字已确认" : "文字未确认"}</p>
-        <h1>每页先写可编辑的文字。</h1>
-        <p className="lede">这里只生成标题和正文，不会立刻画图或做完整文稿。重新生成会替换文字，不移动已经摆好的占位框。</p>
+        <h1>生成每页文字。</h1>
+        <p className="lede">{view.copy?.status === "confirmed" ? "文字已确认。" : "文字未确认。"} 这一步只写标题和正文。模型失败会停在这里，不会假装成功。重新生成不移动占位。</p>
         {error ? <p className="alert" role="alert">{error}</p> : null}
         {notice ? <p className="ok" role="status">{notice}</p> : null}
         {view.copy?.stale ? <p className="alert">大纲变了，这份文字待核对。占位框还在。</p> : null}

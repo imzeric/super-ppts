@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "校对台",
-  description: "从大纲生成可编辑的 PowerPoint",
+  description: "从一段说明生成可编辑的 PowerPoint",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

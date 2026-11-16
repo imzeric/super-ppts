@@ -42,6 +42,9 @@ export type Slot = {
   description: string;
   instruction: string;
   outputType: OutputType;
+  sourceKind: "native" | "mermaid" | "antv" | "chart" | "image";
+  sourceText: string;
+  outputMode: "png" | "svg" | "native";
   status: "empty" | "succeeded" | "failed";
   stale: boolean;
   error?: string;
@@ -49,7 +52,8 @@ export type Slot = {
   chart?: ChartSpec;
   table?: TableSpec;
   imageBase64?: string;
-  resultKind?: "native" | "raster";
+  svg?: string;
+  resultKind?: "native" | "raster" | "vector";
 };
 
 const slotSchema = z
@@ -64,6 +68,9 @@ const slotSchema = z
     description: z.string().max(400, "画面描述最多 400 字。"),
     instruction: z.string().max(400, "绘图说明最多 400 字。"),
     outputType: z.enum(OUTPUT_TYPES),
+    sourceKind: z.enum(["native", "mermaid", "antv", "chart", "image"]).default("native"),
+    sourceText: z.string().max(20_000).default(""),
+    outputMode: z.enum(["png", "svg", "native"]).default("native"),
     status: z.enum(["empty", "succeeded", "failed"]).default("empty"),
     stale: z.boolean().default(false),
     error: z.string().max(300).optional(),
@@ -71,7 +78,8 @@ const slotSchema = z
     chart: z.any().optional(),
     table: z.any().optional(),
     imageBase64: z.string().max(2_000_000).optional(),
-    resultKind: z.enum(["native", "raster"]).optional(),
+    svg: z.string().max(500_000).optional(),
+    resultKind: z.enum(["native", "raster", "vector"]).optional(),
   })
   .superRefine((slot, ctx) => {
     if (slot.x + slot.w > SLIDE_CX || slot.y + slot.h > SLIDE_CY) {

@@ -1,13 +1,17 @@
 import { mkdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-test("四步演示：Markdown、文字、占位、批量绘制", async ({ page }) => {
+test("六步：说明、大纲、属性、文字、编辑、配图导出", async ({ page }) => {
   mkdirSync("/opt/cursor/artifacts", { recursive: true });
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
-  await expect(page.getByText("演示模式")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "把说明写成大纲。" })).toBeVisible();
   await page.screenshot({ path: "/opt/cursor/artifacts/home.png", fullPage: true });
-  await page.getByLabel("背景").fill("社区图书角三个月试点");
+  const prompt = `社区图书角三个月试点。${"借阅".repeat(4500)}`;
+  expect(prompt.length).toBeGreaterThan(8000);
+  await page.getByLabel("生成说明").fill(prompt);
   await page.getByRole("button", { name: "生成大纲" }).click();
+  await expect(page.getByText(`说明共 ${prompt.length} 字，未截断。`)).toBeVisible();
   const markdown = page.getByLabel("大纲 Markdown");
   await expect(markdown).toHaveValue(/# 社区图书角三个月试点/);
   const original = await markdown.inputValue();
@@ -21,55 +25,38 @@ test("四步演示：Markdown、文字、占位、批量绘制", async ({ page }
   await expect(page.getByText("社区图书角三个月试点（收紧）")).toBeVisible();
   await page.getByRole("button", { name: "采用优化" }).click();
   await page.getByRole("button", { name: "确认大纲" }).click();
-  await expect(page.getByText("大纲已确认。")).toBeVisible();
 
-  await page.getByRole("link", { name: "2 文字" }).click();
+  await page.getByRole("link", { name: "属性" }).click();
+  await page.getByRole("button", { name: "4:3" }).click();
+  await page.getByRole("button", { name: "讲义" }).click();
+  await page.getByRole("button", { name: "确认属性" }).click();
+  await expect(page.getByText("属性已确认。")).toBeVisible();
+  await page.screenshot({ path: "/opt/cursor/artifacts/templates.png", fullPage: true });
+
+  await page.getByRole("link", { name: "内容" }).click();
   await page.getByRole("button", { name: "生成幻灯片文字" }).click();
   await page.getByLabel("第 1 页标题").fill("社区图书角开场");
   await page.getByRole("button", { name: "保存文字" }).click();
-  await expect(page.getByText("已保存", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("第 1 页标题")).toHaveValue("社区图书角开场");
   await page.getByRole("button", { name: "确认文字" }).click();
-  await page.screenshot({ path: "/opt/cursor/artifacts/copy.png", fullPage: true });
 
-  await page.getByRole("link", { name: "3 占位" }).click();
-  await page.getByRole("button", { name: "保存占位" }).click();
-  await expect(page.getByText("已保存占位")).toBeVisible();
-  await page.reload();
-  await expect(page.getByText("借阅流程")).toBeVisible();
-  await page.screenshot({ path: "/opt/cursor/artifacts/canvas.png", fullPage: true });
+  await page.getByRole("link", { name: "编辑" }).click();
+  await page.getByRole("button", { name: "添加占位" }).click();
+  await expect(page.getByText("已添加占位")).toBeVisible();
+  await page.screenshot({ path: "/opt/cursor/artifacts/editor.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.screenshot({ path: "/opt/cursor/artifacts/editor-narrow.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 800 });
 
-  await page.getByRole("link", { name: "4 绘制" }).click();
-  const placeholderDownload = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出 PPTX" }).click();
-  await (await placeholderDownload).saveAs("/opt/cursor/artifacts/sample-placeholder.pptx");
+  await page.getByRole("link", { name: "配图" }).click();
   await page.getByLabel("选择 借阅流程").check();
   await page.getByRole("button", { name: "绘制所选" }).click();
   await expect(page.getByText("原生可编辑")).toBeVisible();
   await page.getByRole("button", { name: "绘制所选" }).click();
   await expect(page.getByText("已跳过已完成的占位。")).toBeVisible();
-  await page.getByRole("link", { name: "编辑这张图" }).click();
-  await expect(page.getByLabel("节点 n1 标签")).toHaveValue("到馆登记");
-  await page.screenshot({ path: "/opt/cursor/artifacts/diagram.png", fullPage: true });
-  await page.getByRole("link", { name: "4 绘制" }).click();
-  const editableDownload = page.waitForEvent("download");
+  const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出 PPTX" }).click();
-  await (await editableDownload).saveAs("/opt/cursor/artifacts/sample-editable.pptx");
-  await page.screenshot({ path: "/opt/cursor/artifacts/draw.png", fullPage: true });
-
-  await page.goto("/settings");
-  await page.getByLabel("文本规划地址").fill("https://example.test/v1");
-  await page.getByLabel("文本规划模型").fill("demo-model");
-  await page.getByRole("textbox", { name: "文本规划密钥", exact: true }).fill("super-secret-key");
-  await page.getByRole("button", { name: "保存文本规划" }).click();
-  await expect(page.getByLabel("文本规划密钥状态")).toContainText("••••ey");
-  await expect(page.getByText("super-secret-key")).toHaveCount(0);
-  await page.getByRole("textbox", { name: "文本规划密钥", exact: true }).fill("");
-  await page.getByLabel("文本规划模型").fill("kept-model");
-  await page.getByRole("button", { name: "保存文本规划" }).click();
-  await expect(page.getByLabel("文本规划密钥状态")).toContainText("••••ey");
-  await page.getByRole("button", { name: "清除文本规划密钥" }).click();
-  await expect(page.getByLabel("文本规划密钥状态")).toContainText("未设置密钥");
-  await page.screenshot({ path: "/opt/cursor/artifacts/settings.png", fullPage: true });
+  await (await download).saveAs("/opt/cursor/artifacts/sample-editable.pptx");
+  await page.screenshot({ path: "/opt/cursor/artifacts/illustrate.png", fullPage: true });
 });

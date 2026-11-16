@@ -43,9 +43,8 @@ export default function OutlinePage() {
   return (
     <Frame mode={view.mode} step="outline" projectId={params.id}>
       <section className="sheet">
-        <p className="kicker">第一步 · {view.outline.status === "confirmed" ? "已确认" : "草稿"}</p>
-        <h1>{view.outline.title || view.project.title}</h1>
-        <p className="lede">大纲是有限语法的 Markdown。一次最多 8 张幻灯片，确认后才进入文字稿。语法问题会标出行号，不能确认。</p>
+        <h1>{view.outline.title || "大纲"}</h1>
+        <p className="lede">{view.outline.status === "confirmed" ? "大纲已确认。" : "草稿。"} Markdown 可以改、可以预览。超过 40 张会提示，原文仍会保存。语法问题标出行号，确认前必须先修好。说明共 {view.project.background.length} 字，未截断。</p>
         {error ? <p className="alert" role="alert">{error}</p> : null}
         {notice ? <p className="ok" role="status">{notice}</p> : null}
         {stale ? (

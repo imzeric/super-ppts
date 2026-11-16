@@ -24,7 +24,7 @@ const SYSTEM = [
   "markdown 必须以 # 标题开头。每张幻灯片用 ## 标题，并包含 <!-- id: 英文编号 --> 和 kind: title|bullets|table|diagram|chart。",
   "图还要有 diagram: flow|org|architecture|relation，以及至少两个 - 节点。",
   "表格和图表使用 | 表格。图表还要有 chart: bar|line|pie，第二列是数字。",
-  "最多 8 张幻灯片。不要输出解释。",
+  "幻灯片不要超过 40 张。不要输出解释。",
 ].join("");
 
 function endpoint(baseUrl: string): string {

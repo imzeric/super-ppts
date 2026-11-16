@@ -74,6 +74,11 @@ export function openDatabase(filename: string): DatabaseSync {
     );
   `);
   ensureColumn(db, "outline_versions", "markdown", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "projects", "aspect", "TEXT NOT NULL DEFAULT '16:9'");
+  ensureColumn(db, "projects", "width_emu", "INTEGER NOT NULL DEFAULT 12192000");
+  ensureColumn(db, "projects", "height_emu", "INTEGER NOT NULL DEFAULT 6858000");
+  ensureColumn(db, "projects", "template_id", "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn(db, "projects", "properties_confirmed", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 

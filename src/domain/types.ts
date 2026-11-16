@@ -68,9 +68,9 @@ export const DEFAULT_THEME: Diagram["theme"] = {
 };
 
 export const LIMITS = {
-  sourceText: 8000,
+  transportText: 1_000_000,
   sectionsMin: 1,
-  sectionsMax: 8,
+  sectionsMax: 40,
   title: 80,
   subtitle: 120,
   bullet: 200,
