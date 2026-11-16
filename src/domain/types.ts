@@ -1,4 +1,5 @@
-export type SourceKind = "topic" | "paste";
+export type SourceKind = "topic" | "paste" | "background";
+export type DiagramIntent = "flow" | "org" | "architecture" | "relation";
 export type SectionKind = "title" | "bullets" | "table" | "diagram" | "chart";
 export type ChartTypeName = "bar" | "line" | "pie";
 export type ShapeName = "rect" | "roundRect" | "ellipse" | "diamond";
@@ -25,6 +26,7 @@ export type OutlineSection = {
   table?: TableSpec;
   chart?: ChartSpec;
   diagramId?: string;
+  diagramIntent?: DiagramIntent;
   notes?: string;
 };
 

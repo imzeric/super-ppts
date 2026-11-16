@@ -1,5 +1,7 @@
 # super-ppts MVP Implementation Plan
 
+> 后续四步合同见 `2026-11-16-super-ppts-four-stage.md`。本文件保留首版记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a single-process Chinese Next.js app that turns a topic into an approved outline, a 16:9 preview, an editable diagram, and a native PPTX.

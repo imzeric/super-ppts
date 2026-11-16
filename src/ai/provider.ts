@@ -1,33 +1,30 @@
 import { AppError } from "../domain/errors";
-import { parseOutline } from "../domain/validate";
-import type { OutlineSection, SourceKind } from "../domain/types";
-import { cloneSections, DEMO_SECTIONS, tightenSections } from "./fixture";
+import { parseMarkdownOutline, tightenMarkdown } from "../domain/markdown";
+import { DEMO_MARKDOWN } from "./fixture";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-export type GenerateInput = { sourceKind: SourceKind; sourceText: string };
-export type OptimizeInput = { sections: OutlineSection[]; instruction: string; sectionId?: string };
-
 export type OutlineProvider = {
-  generate(input: GenerateInput): Promise<OutlineSection[]>;
-  optimize(input: OptimizeInput): Promise<OutlineSection[]>;
+  generateMarkdown(input: { background: string }): Promise<string>;
+  optimizeMarkdown(input: { markdown: string; instruction: string; headingId?: string }): Promise<string>;
 };
 
 type Env = {
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
   AI_MODEL?: string;
+  AI_TEXT_BASE_URL?: string;
+  AI_TEXT_API_KEY?: string;
+  AI_TEXT_MODEL?: string;
   [key: string]: string | undefined;
 };
 
 const SYSTEM = [
-  "你是中文演示文稿编辑。只返回一个 JSON 对象，形如 {\"sections\":[]}。",
-  "节种类只能是 title、bullets、table、diagram、chart。节数 1 到 8。",
-  "title 节包含 title 和可选 subtitle。bullets 节包含 title 和 bullets。",
-  "table 节包含 title 与 table.headers、table.rows。",
-  "diagram 节包含 title 和至少两个 bullets，表示流程节点。",
-  "chart 节包含 title 与 chart.type（bar、line 或 pie）、categories、series。",
-  "饼图只能有一个系列，数值必须是数字。不要输出 Markdown。",
+  "你是中文演示文稿编辑。只返回 JSON：{\"markdown\":\"...\"}。",
+  "markdown 必须以 # 标题开头。每张幻灯片用 ## 标题，并包含 <!-- id: 英文编号 --> 和 kind: title|bullets|table|diagram|chart。",
+  "图还要有 diagram: flow|org|architecture|relation，以及至少两个 - 节点。",
+  "表格和图表使用 | 表格。图表还要有 chart: bar|line|pie，第二列是数字。",
+  "最多 8 张幻灯片。不要输出解释。",
 ].join("");
 
 function endpoint(baseUrl: string): string {
@@ -36,31 +33,22 @@ function endpoint(baseUrl: string): string {
   return `${trimmed}/chat/completions`;
 }
 
-function createLiveProvider(options: {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  fetchImpl: FetchLike;
-}): OutlineProvider {
-  const { baseUrl, apiKey, model, fetchImpl } = options;
-
-  const complete = async (user: string): Promise<OutlineSection[]> => {
-    if (!baseUrl || !model) {
-      throw new AppError("PROVIDER_CONFIG", "已填写 AI_API_KEY，还需要同时填写 AI_BASE_URL 和 AI_MODEL。", 400);
+function createLiveProvider(options: { baseUrl: string; apiKey: string; model: string; fetchImpl: FetchLike }): OutlineProvider {
+  const complete = async (user: string): Promise<string> => {
+    if (!options.baseUrl || !options.model) {
+      throw new AppError("PROVIDER_CONFIG", "已填写文本密钥，还需要同时填写文本接口地址和模型名。", 400);
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
     let response: Response;
     try {
-      response = await fetchImpl(endpoint(baseUrl), {
+      response = await options.fetchImpl(endpoint(options.baseUrl), {
         method: "POST",
+        redirect: "error",
         signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model,
+          model: options.model,
           temperature: 0.2,
           response_format: { type: "json_object" },
           messages: [
@@ -74,9 +62,7 @@ function createLiveProvider(options: {
     } finally {
       clearTimeout(timer);
     }
-    if (!response.ok) {
-      throw new AppError("PROVIDER_UNAVAILABLE", `模型服务返回 ${response.status}，大纲未更新。`, 502);
-    }
+    if (!response.ok) throw new AppError("PROVIDER_UNAVAILABLE", `模型服务返回 ${response.status}，大纲未更新。`, 502);
     let payload: unknown;
     try {
       payload = await response.json();
@@ -84,53 +70,82 @@ function createLiveProvider(options: {
       throw new AppError("PROVIDER_SCHEMA", "模型没有返回 JSON，大纲未更新。", 422);
     }
     const content = (payload as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content;
-    if (!content) throw new AppError("PROVIDER_SCHEMA", "模型返回里没有大纲内容。", 422);
+    if (!content) throw new AppError("PROVIDER_SCHEMA", "模型返回里没有大纲。", 422);
     let parsed: unknown;
     try {
       parsed = JSON.parse(content);
     } catch {
       throw new AppError("PROVIDER_SCHEMA", "模型返回的大纲无法解析。", 422);
     }
-    const sections = (parsed as { sections?: unknown }).sections ?? parsed;
-    try {
-      return parseOutline(sections);
-    } catch (error) {
-      if (error instanceof AppError && error.code === "VALIDATION") {
-        throw new AppError("PROVIDER_SCHEMA", "模型返回的大纲不符合结构，未替换当前稿。", 422);
-      }
-      throw error;
-    }
+    const markdown = (parsed as { markdown?: unknown }).markdown;
+    if (typeof markdown !== "string") throw new AppError("PROVIDER_SCHEMA", "模型需要返回 markdown 字符串。", 422);
+    const outline = parseMarkdownOutline(markdown);
+    if (outline.issues.length > 0) throw new AppError("PROVIDER_SCHEMA", "模型返回的 Markdown 不符合大纲语法，未替换当前稿。", 422);
+    return markdown;
   };
 
   return {
-    generate(input) {
-      return complete(`请根据以下${input.sourceKind === "topic" ? "主题" : "材料"}生成大纲：\n${input.sourceText}`);
+    generateMarkdown(input) {
+      return complete(`请根据这段背景写大纲：\n${input.background}`);
     },
-    optimize(input) {
-      const scope = input.sectionId ? `只改 id 为 ${input.sectionId} 的节，其他节保持原样。` : "可以调整每一节的标题和文字。";
-      return complete(`${scope}\n优化要求：${input.instruction}\n当前大纲：\n${JSON.stringify({ sections: input.sections })}`);
+    optimizeMarkdown(input) {
+      const scope = input.headingId ? `只收紧 id 为 ${input.headingId} 的 ## 标题，其余原样保留。` : "可以收紧标题，但必须保留 id 注释和 kind。";
+      return complete(`${scope}\n要求：${input.instruction}\n当前 Markdown：\n${input.markdown}`);
     },
   };
 }
 
 const demoProvider: OutlineProvider = {
-  async generate() {
-    return cloneSections(DEMO_SECTIONS);
+  async generateMarkdown() {
+    return DEMO_MARKDOWN;
   },
-  async optimize(input) {
-    return tightenSections(cloneSections(input.sections), input.sectionId);
+  async optimizeMarkdown(input) {
+    return tightenMarkdown(input.markdown, input.headingId);
   },
 };
 
+export async function chatJson(options: { baseUrl: string; apiKey: string; model: string; system: string; user: string; fetchImpl: FetchLike }): Promise<unknown> {
+  if (!options.baseUrl || !options.model) throw new AppError("PROVIDER_CONFIG", "文本接口还需要地址和模型名。", 400);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await options.fetchImpl(endpoint(options.baseUrl), {
+      method: "POST",
+      redirect: "error",
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: options.model,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: options.system },
+          { role: "user", content: options.user },
+        ],
+      }),
+    });
+  } catch {
+    throw new AppError("PROVIDER_UNAVAILABLE", "模型服务没有连上，这个占位未替换。", 502);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) throw new AppError("PROVIDER_UNAVAILABLE", `模型服务返回 ${response.status}，这个占位未替换。`, 502);
+  const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content) throw new AppError("PROVIDER_SCHEMA", "模型没有返回 JSON。", 422);
+  return JSON.parse(content) as unknown;
+}
+
 export function resolveProvider(env: Env, fetchImpl: FetchLike = fetch): { mode: "demo" | "live"; provider: OutlineProvider } {
-  const apiKey = env.AI_API_KEY?.trim() ?? "";
+  const apiKey = env.AI_TEXT_API_KEY?.trim() || env.AI_API_KEY?.trim() || "";
   if (!apiKey) return { mode: "demo", provider: demoProvider };
   return {
     mode: "live",
     provider: createLiveProvider({
-      baseUrl: env.AI_BASE_URL?.trim() ?? "",
+      baseUrl: env.AI_TEXT_BASE_URL?.trim() || env.AI_BASE_URL?.trim() || "",
       apiKey,
-      model: env.AI_MODEL?.trim() ?? "",
+      model: env.AI_TEXT_MODEL?.trim() || env.AI_MODEL?.trim() || "",
       fetchImpl,
     }),
   };

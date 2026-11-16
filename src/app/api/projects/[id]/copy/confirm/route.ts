@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    return Response.json(await getServices().approveAndMaterialize(id));
+    return Response.json(getServices().confirmCopy(id));
   } catch (error) {
     return errorResponse(error);
   }

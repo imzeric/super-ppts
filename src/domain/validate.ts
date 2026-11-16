@@ -60,6 +60,7 @@ const sectionSchema = z
     table: tableSchema.optional(),
     chart: chartSchema.optional(),
     diagramId: z.string().min(1).max(80).optional(),
+    diagramIntent: z.enum(["flow", "org", "architecture", "relation"]).optional(),
     notes: z.string().max(LIMITS.notes).optional(),
   })
   .superRefine((section, ctx) => {

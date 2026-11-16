@@ -37,6 +37,32 @@ export function openDatabase(filename: string): DatabaseSync {
       ir_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS slide_copies (
+      project_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      stale INTEGER NOT NULL,
+      slides_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS slots (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS generation_runs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS provider_profiles (
+      capability TEXT PRIMARY KEY,
+      base_url TEXT NOT NULL,
+      model TEXT NOT NULL,
+      api_key TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS export_jobs (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -47,5 +73,11 @@ export function openDatabase(filename: string): DatabaseSync {
       created_at TEXT NOT NULL
     );
   `);
+  ensureColumn(db, "outline_versions", "markdown", "TEXT NOT NULL DEFAULT ''");
   return db;
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!rows.some((row) => row.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

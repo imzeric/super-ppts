@@ -2,9 +2,10 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 const steps = [
-  { id: "outline", label: "大纲" },
-  { id: "preview", label: "预览" },
-  { id: "export", label: "导出" },
+  { id: "outline", href: "", label: "1 大纲" },
+  { id: "copy", href: "/copy", label: "2 文字" },
+  { id: "canvas", href: "/canvas", label: "3 占位" },
+  { id: "draw", href: "/draw", label: "4 绘制" },
 ] as const;
 
 export function Frame({
@@ -14,7 +15,7 @@ export function Frame({
   children,
 }: {
   mode?: "demo" | "live";
-  step: "start" | "outline" | "preview" | "diagram";
+  step: "start" | "outline" | "copy" | "canvas" | "draw" | "diagram" | "settings";
   projectId?: string;
   children: ReactNode;
 }) {
@@ -28,21 +29,21 @@ export function Frame({
         </Link>
         {projectId ? (
           <nav className="steps" aria-label="进度">
-            <Link href={`/projects/${projectId}`} aria-current={step === "outline" ? "page" : undefined}>
-              1 {steps[0].label}
-            </Link>
-            <Link href={`/projects/${projectId}/preview`} aria-current={step === "preview" ? "page" : undefined}>
-              2 {steps[1].label}
-            </Link>
-            <span aria-current={step === "preview" ? undefined : undefined}>3 {steps[2].label}</span>
+            {steps.map((item) => (
+              <Link key={item.id} href={`/projects/${projectId}${item.href}`} aria-current={step === item.id ? "page" : undefined}>
+                {item.label}
+              </Link>
+            ))}
           </nav>
         ) : (
-          <p className="mast-note">从一句话到可编辑的 PowerPoint</p>
+          <p className="mast-note">
+            <Link href="/settings">接口设置</Link>
+          </p>
         )}
       </header>
       {mode === "demo" ? (
         <p className="banner" role="status">
-          演示模式。没有配置模型密钥，当前使用内置的社区图书角示例，不会访问网络。
+          演示模式。没有配置文本模型密钥，大纲使用内置示例，不会访问网络。
         </p>
       ) : null}
       <main>{children}</main>

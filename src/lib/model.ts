@@ -1,39 +1,3 @@
-export type SourceKind = "topic" | "paste";
-export type SectionKind = "title" | "bullets" | "table" | "diagram" | "chart";
-
-export type ChartSpec = {
-  type: "bar" | "line" | "pie";
-  categories: string[];
-  series: Array<{ name: string; values: number[] }>;
-};
-
-export type OutlineSection = {
-  id: string;
-  kind: SectionKind;
-  title: string;
-  subtitle?: string;
-  bullets?: string[];
-  table?: { headers: string[]; rows: string[][] };
-  chart?: ChartSpec;
-  diagramId?: string;
-  notes?: string;
-};
-
-export type DeckSlide =
-  | { id: string; kind: "title"; title: string; subtitle?: string }
-  | { id: string; kind: "bullets"; title: string; bullets: string[] }
-  | { id: string; kind: "table"; title: string; headers: string[]; rows: string[][] }
-  | { id: string; kind: "diagram"; title: string; diagramId: string }
-  | { id: string; kind: "chart"; title: string; chart: ChartSpec };
-
-export type ProjectView = {
-  mode: "demo" | "live";
-  project: { id: string; title: string; sourceKind: SourceKind; sourceText: string };
-  outline: { versionId: string; versionNo: number; status: "draft" | "approved"; sections: OutlineSection[] };
-  candidate: null | { versionId: string; versionNo: number; sections: OutlineSection[] };
-  deck: null | { id: string; stale: boolean; slides: DeckSlide[] };
-};
-
 export type DiagramNode = {
   id: string;
   label: string;
@@ -66,3 +30,52 @@ export async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(body.message || "请求失败。");
   return body;
 }
+
+export type MarkdownIssue = { line: number; message: string };
+export type SlideCopy = { id: string; title: string; lines: string[] };
+export type OutputType =
+  | "diagram-flow"
+  | "diagram-org"
+  | "diagram-architecture"
+  | "diagram-relation"
+  | "chart-bar"
+  | "chart-line"
+  | "chart-pie"
+  | "table"
+  | "illustration";
+
+export type Slot = {
+  id: string;
+  slideId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  title: string;
+  description: string;
+  instruction: string;
+  outputType: OutputType;
+  status: "empty" | "succeeded" | "failed";
+  stale: boolean;
+  error?: string;
+  diagramId?: string;
+  resultKind?: "native" | "raster";
+};
+
+export type ProjectView = {
+  mode: "demo" | "live";
+  project: { id: string; title: string; background: string };
+  outline: {
+    versionId: string;
+    versionNo: number;
+    status: "draft" | "confirmed";
+    markdown: string;
+    title: string;
+    sections: Array<{ id: string; kind: string; title: string }>;
+    issues: MarkdownIssue[];
+  };
+  candidate: null | { versionId: string; versionNo: number; markdown: string };
+  copy: null | { status: "draft" | "confirmed"; stale: boolean; slides: SlideCopy[] };
+  slots: Slot[];
+  diagrams: Array<{ id: string; label: string }>;
+};

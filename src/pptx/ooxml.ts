@@ -2,7 +2,12 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { AppError } from "../domain/errors";
 import type { Anchor, Diagram, DiagramNode } from "../domain/types";
 
-type SlideLike = { kind: string; diagram?: Diagram };
+type SlideLike = {
+  kind: string;
+  diagram?: Diagram;
+  diagrams?: Array<{ diagram: Diagram; prefix: string }>;
+  allowImages?: boolean;
+};
 
 const ANCHOR_INDEX: Record<Exclude<Anchor, "auto">, number> = {
   top: 0,
@@ -18,23 +23,25 @@ export function bindDiagramConnectors(input: Uint8Array, slides: SlideLike[]): U
     const bytes = files[path];
     if (!bytes) return;
     let xml = strFromU8(bytes);
-    if (slide.kind === "diagram" && slide.diagram) xml = insertConnectors(xml, slide.diagram);
+    if (slide.kind === "diagram" && slide.diagram) xml = insertConnectors(xml, slide.diagram, "node-");
+    for (const item of slide.diagrams ?? []) xml = insertConnectors(xml, item.diagram, item.prefix);
     files[path] = strToU8(xml);
   });
+  const allowImages = slides.some((slide) => slide.allowImages);
   for (const name of Object.keys(files)) {
-    if (name.startsWith("ppt/media/") && !name.endsWith("/")) {
-      throw new AppError("UNSUPPORTED_EXPORT", "导出里出现了图片部件。图和图表必须保持为可编辑对象，已停止。", 422);
+    if (name.startsWith("ppt/media/") && !name.endsWith("/") && !allowImages) {
+      throw new AppError("UNSUPPORTED_EXPORT", "导出里出现了图片部件。只有明确选择插图时才写入位图。", 422);
     }
-    if (name === "ppt/media" || name === "ppt/media/") delete files[name];
+    if ((name === "ppt/media" || name === "ppt/media/") && !allowImages) delete files[name];
   }
   return zipSync(files);
 }
 
-function insertConnectors(xml: string, diagram: Diagram): string {
+function insertConnectors(xml: string, diagram: Diagram, prefix: string): string {
   const shapes = readShapeNames(xml);
   const idByNode = new Map<string, string>();
   for (const shape of shapes) {
-    if (shape.name.startsWith("node-")) idByNode.set(shape.name.slice("node-".length), shape.id);
+    if (shape.name.startsWith(prefix)) idByNode.set(shape.name.slice(prefix.length), shape.id);
   }
   let nextId = shapes.reduce((max, shape) => Math.max(max, Number(shape.id)), 2);
   const nodes = new Map(diagram.nodes.map((node) => [node.id, node]));

@@ -1,32 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveProvider } from "../src/ai/provider";
 
-const input = { sourceKind: "topic" as const, sourceText: "社区图书角试点" };
-
 describe("resolveProvider", () => {
-  it("uses the fixture and does not call fetch when no key is set", async () => {
+  it("returns the markdown fixture and does not call fetch without a key", async () => {
     const fetchImpl = vi.fn(() => {
       throw new Error("demo must not use the network");
     });
     const resolved = resolveProvider({ AI_API_KEY: "  " }, fetchImpl);
     expect(resolved.mode).toBe("demo");
-    const sections = await resolved.provider.generate(input);
-    expect(sections.some((section) => section.title.includes("社区图书角"))).toBe(true);
+    const markdown = await resolved.provider.generateMarkdown({ background: "社区图书角试点" });
+    expect(markdown).toContain("# 社区图书角三个月试点");
+    expect(markdown).toContain("kind: diagram");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("marks only the requested section as tightened", async () => {
+  it("tightens only the requested heading", async () => {
     const resolved = resolveProvider({});
-    const sections = await resolved.provider.generate(input);
-    const target = sections[1];
-    expect(target).toBeDefined();
-    const next = await resolved.provider.optimize({
-      sections,
-      instruction: "把表述收紧",
-      sectionId: target?.id,
-    });
-    expect(next.find((section) => section.id === target?.id)?.title.endsWith("（收紧）")).toBe(true);
-    expect(next.find((section) => section.id === sections[0]?.id)?.title.endsWith("（收紧）")).toBe(false);
+    const markdown = await resolved.provider.generateMarkdown({ background: "背景" });
+    const next = await resolved.provider.optimizeMarkdown({ markdown, instruction: "收紧", headingId: "sec-bullets" });
+    expect(next).toContain("## 试点做了什么（收紧）");
+    expect(next).toContain("## 开场\n");
   });
 
   it("does not turn a live failure into the demo fixture", async () => {
@@ -38,37 +31,31 @@ describe("resolveProvider", () => {
       fetchImpl,
     );
     expect(resolved.mode).toBe("live");
-    await expect(resolved.provider.generate(input)).rejects.toMatchObject({
-      code: "PROVIDER_UNAVAILABLE",
-    });
+    await expect(resolved.provider.generateMarkdown({ background: "背景" })).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
     try {
-      await resolved.provider.generate(input);
-      throw new Error("live failure returned success");
+      await resolved.provider.generateMarkdown({ background: "背景" });
     } catch (error) {
       expect((error as Error).message.includes("KEY123")).toBe(false);
       expect((error as Error).message.includes("社区图书角")).toBe(false);
     }
   });
 
-  it("refuses to call the network when the key is set but the base URL is missing", async () => {
+  it("refuses the network when the key exists but the base URL does not", async () => {
     const fetchImpl = vi.fn();
     const resolved = resolveProvider({ AI_API_KEY: "KEY123", AI_BASE_URL: "", AI_MODEL: "demo-model" }, fetchImpl);
-    await expect(resolved.provider.generate(input)).rejects.toMatchObject({ code: "PROVIDER_CONFIG" });
+    await expect(resolved.provider.generateMarkdown({ background: "背景" })).rejects.toMatchObject({ code: "PROVIDER_CONFIG" });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("rejects a live payload that is not an outline", async () => {
+  it("rejects markdown that does not match the outline syntax", async () => {
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ sections: [] }) } }] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
+      new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ markdown: "# 只有标题" }) } }] }), { status: 200 }),
     );
     const resolved = resolveProvider(
       { AI_API_KEY: "KEY123", AI_BASE_URL: "https://example.test/v1", AI_MODEL: "demo-model" },
       fetchImpl,
     );
-    await expect(resolved.provider.generate(input)).rejects.toMatchObject({ code: "PROVIDER_SCHEMA" });
+    await expect(resolved.provider.generateMarkdown({ background: "背景" })).rejects.toMatchObject({ code: "PROVIDER_SCHEMA" });
     const init = fetchImpl.mock.calls[0]?.[1];
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer KEY123");
   });
