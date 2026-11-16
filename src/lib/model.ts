@@ -60,6 +60,7 @@ export type Slot = {
   outputMode?: "png" | "svg" | "native";
   status: "empty" | "succeeded" | "failed";
   stale: boolean;
+  detached?: boolean;
   error?: string;
   diagramId?: string;
   imageBase64?: string;

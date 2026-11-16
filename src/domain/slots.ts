@@ -47,6 +47,7 @@ export type Slot = {
   outputMode: "png" | "svg" | "native";
   status: "empty" | "succeeded" | "failed";
   stale: boolean;
+  detached?: boolean;
   error?: string;
   diagramId?: string;
   chart?: ChartSpec;
@@ -73,6 +74,7 @@ const slotSchema = z
     outputMode: z.enum(["png", "svg", "native"]).default("native"),
     status: z.enum(["empty", "succeeded", "failed"]).default("empty"),
     stale: z.boolean().default(false),
+    detached: z.boolean().default(false),
     error: z.string().max(300).optional(),
     diagramId: z.string().min(1).max(80).optional(),
     chart: z.any().optional(),

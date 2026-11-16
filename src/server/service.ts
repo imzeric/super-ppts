@@ -10,6 +10,7 @@ import { AppError } from "../domain/errors";
 import { layoutDiagram, seedByIntent, seedDiagram } from "../domain/layout";
 import { parseMarkdownOutline } from "../domain/markdown";
 import { parseSlot, type Slot } from "../domain/slots";
+import { plainText } from "../editor/text";
 import type { Diagram, OutlineSection } from "../domain/types";
 import { LIMITS } from "../domain/types";
 import { parseDiagram, parseOutline, parseSourceText } from "../domain/validate";
@@ -208,7 +209,7 @@ export function createServices(
       db.prepare("UPDATE outline_versions SET status = 'confirmed', sections_json = ? WHERE id = ?").run(JSON.stringify(parsed.sections), current.id);
       return view(projectId);
     },
-    updateDeck: (projectId: string, input: { aspect?: string; templateId?: string }) => {
+    updateDeck: (projectId: string, input: { aspect?: string; templateId?: string; keepConfirmed?: boolean }) => {
       const current = view(projectId).deck;
       const size = findSize(input.aspect ?? current.aspect);
       const template = findTemplate(input.templateId ?? current.templateId);
@@ -222,11 +223,12 @@ export function createServices(
         };
         db.prepare("UPDATE slots SET payload_json = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(next), now(), slot.id);
       }
-      db.prepare("UPDATE projects SET aspect = ?, width_emu = ?, height_emu = ?, template_id = ?, properties_confirmed = 0 WHERE id = ?").run(
+      db.prepare("UPDATE projects SET aspect = ?, width_emu = ?, height_emu = ?, template_id = ?, properties_confirmed = ? WHERE id = ?").run(
         size.id,
         size.widthEmu,
         size.heightEmu,
         template.id,
+        input.keepConfirmed && current.confirmed ? 1 : 0,
         projectId,
       );
       return view(projectId);
@@ -254,6 +256,32 @@ export function createServices(
           JSON.stringify(slides),
           now(),
         );
+      }
+      return view(projectId);
+    },
+    saveWorkspace: (projectId: string, input: { slides: SlideCopy[]; slots: unknown[] }) => {
+      requireCopy(db, projectId);
+      if (input.slides.length < 1 || input.slides.length > 40) {
+        throw new AppError("VALIDATION", "至少保留 1 页，一次最多 40 页。这次没有改动已保存的页面。", 400);
+      }
+      const slides = input.slides.map((slide) => ({
+        id: plainText(slide.id).slice(0, 80),
+        title: plainText(slide.title).slice(0, 80) || "未命名",
+        lines: (slide.lines ?? []).map((line) => plainText(line)).filter(Boolean).slice(0, 12),
+      }));
+      if (slides.some((slide) => !slide.id) || new Set(slides.map((slide) => slide.id)).size !== slides.length) {
+        throw new AppError("VALIDATION", "页面编号重复或为空，没有保存。", 400);
+      }
+      const ids = new Set(slides.map((slide) => slide.id));
+      const slots = input.slots.map((item) => {
+        const slot = parseSlot(item);
+        if (slot.slideId && !ids.has(slot.slideId)) return { ...slot, detached: true, slideId: slot.slideId };
+        return slot;
+      });
+      db.prepare("UPDATE slide_copies SET slides_json = ?, updated_at = ? WHERE project_id = ?").run(JSON.stringify(slides), now(), projectId);
+      db.prepare("DELETE FROM slots WHERE project_id = ?").run(projectId);
+      for (const slot of slots) {
+        db.prepare("INSERT INTO slots (id, project_id, payload_json, updated_at) VALUES (?, ?, ?, ?)").run(slot.id, projectId, JSON.stringify(slot), now());
       }
       return view(projectId);
     },
@@ -319,7 +347,7 @@ export function createServices(
       const runId = randomUUID();
       db.prepare("INSERT INTO generation_runs (id, project_id, status, created_at) VALUES (?, ?, 'running', ?)").run(runId, projectId, now());
       const selected = new Set(input.slotIds ?? []);
-      const targets = loadSlots(db, projectId).filter((slot) => selected.size === 0 || selected.has(slot.id));
+      const targets = loadSlots(db, projectId).filter((slot) => !slot.detached && (selected.size === 0 || selected.has(slot.id)));
       const results: Array<{ id: string; status: "succeeded" | "failed" | "skipped" | "cancelled"; error?: string }> = [];
       for (const slot of targets) {
         const run = db.prepare("SELECT status FROM generation_runs WHERE id = ?").get(runId) as { status: string };
@@ -551,7 +579,7 @@ function toExportDeck(
       kind: "composed" as const,
       title: slide.title,
       lines: slide.lines,
-      slots: slots.filter((slot) => slot.slideId === slide.id).map((slot) => toComposed(db, slot)),
+      slots: slots.filter((slot) => slot.slideId === slide.id && !slot.detached).map((slot) => toComposed(db, slot)),
     })),
   };
 }
