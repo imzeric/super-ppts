@@ -39,7 +39,7 @@ while time.time() < deadline:
     try:
         with urllib.request.urlopen(base + "/", timeout=5) as home:
             page = home.read()
-            home_ok = home.status == 200 and b"把说明写成大纲" in page
+            home_ok = home.status == 200 and "把说明写成大纲".encode() in page
         with urllib.request.urlopen(base + "/api/health", timeout=5) as health:
             body = json.load(health)
         last = json.dumps(body, ensure_ascii=False)
