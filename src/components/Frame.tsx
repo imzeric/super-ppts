@@ -23,10 +23,7 @@ export function Frame({
   return (
     <div className="desk">
       <header className="mast">
-        <Link href="/" className="mark">
-          <span>校对台</span>
-          <small>LIGHT TABLE</small>
-        </Link>
+        <Link href="/" className="mark">校对台</Link>
         {projectId ? (
           <nav className="steps" aria-label="进度">
             {steps.map((item) => (
@@ -36,7 +33,7 @@ export function Frame({
             ))}
           </nav>
         ) : (
-          <Link href="/settings">接口设置</Link>
+          <Link className="settings-link" href="/settings">接口设置</Link>
         )}
       </header>
       {mode === "demo" ? <p className="banner" role="status">演示模式。没有文本密钥，不会访问模型。超长说明会原样保存。</p> : null}
